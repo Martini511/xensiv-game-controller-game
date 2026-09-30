@@ -50,6 +50,26 @@ Der Dev-Server laeuft danach unter der in der Konsole angezeigten URL
 | `npm run build`   | Produktions-Build nach `dist/`        |
 | `npm run preview` | Build lokal testen                    |
 
+> **Wichtig:** Die `index.html` laesst sich nicht per Doppelklick oeffnen. Das
+> Projekt nutzt ES-Module und Bare Imports (`three`), die der Browser unter
+> `file://` nicht aufloesen kann - das Ergebnis waere ein schwarzer Bildschirm.
+> Es braucht immer einen Webserver (`npm run dev` bzw. `npm run preview`).
+
+## Deployment auf GitHub Pages
+
+Jeder Push auf `main` startet den Workflow
+[.github/workflows/deploy.yml](.github/workflows/deploy.yml): er baut das
+Projekt und veroeffentlicht `dist/` auf GitHub Pages.
+
+Der Build nutzt `base: "./"` – alle Asset-URLs sind relativ zum JS-Bundle
+(`new URL("platine-<hash>.glb", import.meta.url)`). Dadurch laeuft derselbe
+Build unter `https://<user>.github.io/<repo>/` genauso wie unter jeder
+anderen URL, ohne dass der Repository-Name im Code steht.
+
+Beim ersten Lauf schaltet der Workflow GitHub Pages selbst auf die Quelle
+"GitHub Actions" um. Falls das an den Repository-Rechten scheitert, einmalig
+unter **Settings → Pages → Source** auf *GitHub Actions* stellen.
+
 ## Steuerung
 
 | Eingabe                | Aktion                                        |

@@ -1,6 +1,11 @@
 import { defineConfig } from "vite";
 
 export default defineConfig({
+  // Relative Asset-Pfade: damit laeuft derselbe Build sowohl unter
+  // https://<user>.github.io/<repo>/ als auch unter jeder anderen URL,
+  // ohne dass der Repository-Name fest im Code steht.
+  base: "./",
+
   // Verhindert, dass der Kern von Three.js und die Addons (GLTFLoader) je eine
   // eigene Kopie von "three" bekommen - sonst warnt Three beim Start.
   resolve: {
