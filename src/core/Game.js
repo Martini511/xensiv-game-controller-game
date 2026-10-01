@@ -46,6 +46,7 @@ import {
   EXPLORE,
   EXPLORE_MENU,
   FAILURE,
+  RESET_CONFIRM,
   TITLE,
   VICTORY,
 } from "./mission-texts.js";
@@ -217,6 +218,12 @@ export class Game {
 
   start() {
     this.gamepad.start();
+    // Ausgangslage der Kamera - die Intro-Fahrt endet dort, auch nach einem Reset.
+    this._cameraHome = {
+      pitch: this.cameraRig.pitch,
+      yaw: this.cameraRig.yaw,
+      distance: this.cameraRig.distance,
+    };
     this.intro = new IntroSequence(this.cameraRig);
     this.titleScreen = new TitleScreen(TITLE, document.body);
     this._clock.start();
@@ -250,8 +257,19 @@ export class Game {
     const input = this.gamepad.update();
 
     const introRunning = this.state === "intro";
+    const buttons = input.buttons;
+    // Beide gehalten, einer davon gerade neu - sonst feuert es jeden Frame.
+    const resetCombo =
+      buttons.DPAD_LEFT.pressed &&
+      buttons.DPAD_RIGHT.pressed &&
+      (buttons.DPAD_LEFT.justPressed || buttons.DPAD_RIGHT.justPressed);
 
-    if (introRunning) {
+    if (this.state === "confirm") {
+      if (buttons[ACTION_BUTTON].justPressed) this._backToIntro();
+      else if (buttons[JUMP_BUTTON].justPressed) this._cancelReset();
+    } else if (resetCombo && !introRunning && !this._isTransitioning) {
+      this._askReset();
+    } else if (introRunning) {
       // Jede der beiden Aktionstasten ueberspringt die Kamerafahrt
       if (input.buttons[ACTION_BUTTON].justPressed || input.buttons[JUMP_BUTTON].justPressed) {
         this.intro.finish();
@@ -275,7 +293,11 @@ export class Game {
     // Waehrend Intro, Ueberblendung, Infobildschirm und Endbildschirm ist die
     // Steuerung gesperrt.
     const locked =
-      this._isTransitioning || introRunning || this.state === "briefing" || this.isGameOver;
+      this._isTransitioning ||
+      introRunning ||
+      this.state === "briefing" ||
+      this.state === "confirm" ||
+      this.isGameOver;
 
     // Die Uhr laeuft nur im aktiven Spiel - Infobildschirm pausiert sie.
     if (this.mode === "mission" && (this.state === "playing" || this.state === "falling")) {
@@ -671,6 +693,36 @@ export class Game {
   _showResults() {
     this.state = "won";
     this.message.show(this._results ?? EXPLORE_MENU);
+  }
+
+  /** D-Pad links + rechts: Rueckfrage, ob es zurueck zum Intro gehen soll. */
+  _askReset() {
+    this._beforeReset = {
+      state: this.state,
+      message: this.message.visible ? this.message.content : null,
+    };
+    this.state = "confirm";
+    this.message.show(RESET_CONFIRM);
+  }
+
+  _cancelReset() {
+    const { state, message } = this._beforeReset;
+    this.state = state;
+    if (message) this.message.show(message);
+    else this.message.hide();
+  }
+
+  /** Alles zuruecksetzen und die Kamerafahrt samt Titel erneut abspielen. */
+  _backToIntro() {
+    this.message.hide();
+    this._restart();
+    Object.assign(this.cameraRig, this._cameraHome);
+    this.cameraRig.snapToTarget();
+
+    this.state = "intro";
+    this._atStart = false;
+    this.intro = new IntroSequence(this.cameraRig);
+    this.titleScreen = new TitleScreen(TITLE, document.body);
   }
 
   /** Absturz im Erkundungsmodus: zurueck auf die Kontrollflaeche dieser Seite. */

@@ -68,6 +68,7 @@ export class MessageOverlay {
     footer = "",
     tone = "neutral",
   }) {
+    this.content = { title, body, controls, scores, highlight, footer, tone };
     this.card.className = `message-card tone-${tone}`;
     this.card.replaceChildren(
       heading(title),

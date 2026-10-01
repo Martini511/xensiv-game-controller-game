@@ -23,6 +23,7 @@ export const CONTROLS = [
   { key: "L2 \u00b7 R2", action: "Mark a trigger sensor" },
   { key: "L3 \u00b7 R3", action: "Mark a stick sensor (click the stick)" },
   { key: INFO, action: "Open this info screen again" },
+  { key: "D-Pad \u2190 + \u2192", action: "Back to the intro" },
 ];
 
 export const BRIEFING = {
@@ -81,6 +82,13 @@ export const FAILURE = {
   title: "You fell off the board",
   body: ["There is nothing to stand on beyond the PCB edge. The run is over."],
   footer: `Press ${T} to restart`,
+  tone: "fail",
+};
+
+export const RESET_CONFIRM = {
+  title: "Back to the intro?",
+  body: ["Your current run and everything you have discovered will be reset."],
+  footer: `Press ${T} to go back to the intro \u00b7 press ${F} to cancel`,
   tone: "fail",
 };
 
