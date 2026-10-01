@@ -9,6 +9,7 @@ permissions:
   contents: read
   pages: write
   id-token: write
+  actions: read
 
 # Laufende Deployments nicht abbrechen, aber nur eines gleichzeitig zulassen.
 concurrency:
@@ -50,6 +51,28 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      # Steht Pages noch auf "Deploy from branch", veroeffentlicht GitHub bei
+      # jedem Push zusaetzlich den ungebauten Quellcode (-> Blackscreen). Wer
+      # zuletzt fertig wird, gewinnt - also erst dieses Deployment abwarten.
+      - name: Auf das Branch-Deployment warten
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          for i in $(seq 1 60); do
+            runs=$(gh api "repos/$REPO/actions/runs?head_sha=$SHA&per_page=50" \
+              --jq '[.workflow_runs[] | select(.name == "pages build and deployment")]')
+            total=$(echo "$runs" | jq length)
+            open=$(echo "$runs" | jq '[.[] | select(.status != "completed")] | length')
+            echo "Branch-Deployments: $total, davon offen: $open"
+            if [ "$total" -gt 0 ] && [ "$open" -eq 0 ]; then exit 0; fi
+            # Nach einer Minute ohne Branch-Deployment steht Pages bereits auf Actions.
+            if [ "$total" -eq 0 ] && [ "$i" -ge 6 ]; then exit 0; fi
+            sleep 10
+          done
+          echo "Branch-Deployment nicht abgeschlossen - deploye trotzdem."
+
       - name: Deployen
         id: deployment
         uses: actions/deploy-pages@v4
