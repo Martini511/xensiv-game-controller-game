@@ -43,19 +43,25 @@ export const WORLD_PER_MM = MM;
 
 /**
  * Ab welcher Hoehe ueber der begehbaren Flaeche ein Bauteil blockiert (mm).
- * Alles Flachere wird ueberstiegen. Die Platine hat auf der Oberseite fast nur
- * Bauteile bis ca. 2.2 mm; darueber liegen nur das Display (4.8 mm) und die
- * beiden Joysticks (24.5 mm) - genau die sollen Hindernisse sein.
- * >>> ANPASSEN, wenn zu viel oder zu wenig blockiert. <<<
+ * Alles Flachere wird im Vorbeigehen ueberstiegen, alles Hoehere muss
+ * angesprungen werden.
+ *
+ * 2.2 mm ist eine Untergrenze aus der Geometrie: Die Joystick-Schaefte ragen
+ * auf der Unterseite 1.97 mm heraus, und ihre Bounding-Box ueberdeckt die
+ * Sensormulde von U$19/U$18 mit. Blockieren sie, sind die beiden Sensoren
+ * nicht mehr erreichbar - auch nicht per Sprung, weil man darin wieder auf
+ * 0.62 mm zurueckfaellt.
+ * >>> ANPASSEN, aber nicht unter 2.0. <<<
  */
-export const OBSTACLE_HEIGHT_MM = 3;
+export const OBSTACLE_HEIGHT_MM = 2.2;
 
 /**
- * Lichte Hoehe des Charakters in Weltunits. Bauteile, die komplett darueber
- * schweben - etwa der ueberstehende Joystick-Kopf - blockieren nicht, man
- * laeuft darunter durch.
+ * Lichte Hoehe des Charakters in Weltunits (0.6 = 1.5 mm). Bauteile, die
+ * komplett darueber schweben, blockieren nicht - man laeuft darunter durch.
+ * Der Chip ist nur rund 0.6 mm hoch; das Display haengt 2.25 mm ueber der
+ * Platine und ist damit unterquerbar.
  */
-export const CHARACTER_HEIGHT = 1.2;
+export const CHARACTER_HEIGHT = 0.6;
 
 /** CAD-Modell ist Z-up, Three.js ist Y-up: -90 Grad um X. */
 export const MODEL_ROTATION_X = -Math.PI / 2;
@@ -114,6 +120,12 @@ export const MAX_GROUND_HEIGHT_MM = 8;
 export const FALL_DEATH_Y = -25;
 
 /**
+ * Wie weit die Figur unter ihre Laufebene sacken darf, bevor der Sturz als
+ * endgueltig gilt. Ein Sprung ueber ein Bohrloch bleibt damit rettbar.
+ */
+export const FALL_COMMIT_MM = 2;
+
+/**
  * Kontrollflaeche = Portal zwischen den Ebenen.
  *
  * `top` / `bottom` : Mittelpunkt der Triggerzone bzw. Zielposition in CAD-XY.
@@ -149,14 +161,14 @@ export const SPAWN_MM = { x: 0, y: 36 };
  */
 export const SENSORS = [
   // Unterseite: unter den beiden Sticks (Stickdruck L3/R3) ...
-  { id: "U$19", side: "bottom", button: "R3", x: 23.0, y: 4.5 },
-  { id: "U$18", side: "bottom", button: "L3", x: -23.0, y: 4.5 },
+  { id: "U$19", side: "bottom", button: "R3", info: "stick", x: 23.0, y: 4.5 },
+  { id: "U$18", side: "bottom", button: "L3", info: "stick", x: -23.0, y: 4.5 },
   // ... und in den oberen Ecken, unter den Triggern
-  { id: "U$4", side: "bottom", button: "R2", x: 49.5, y: 42.5 },
-  { id: "U$2", side: "bottom", button: "L2", x: -49.5, y: 42.4 },
+  { id: "U$4", side: "bottom", button: "R2", info: "trigger", x: 49.5, y: 42.5 },
+  { id: "U$2", side: "bottom", button: "L2", info: "trigger", x: -49.5, y: 42.4 },
   // Oberseite: an den Schultern, jeweils neben dem N/S-Symbol
-  { id: "U$9", side: "top", button: "R1", x: 55.6, y: 49.4 },
-  { id: "U$8", side: "top", button: "L1", x: -55.9, y: 49.4 },
+  { id: "U$9", side: "top", button: "R1", info: "shoulder", x: 55.6, y: 49.4 },
+  { id: "U$8", side: "top", button: "L1", info: "shoulder", x: -55.9, y: 49.4 },
 ];
 
 /** Globale Aktionen: Seitenwechsel und Sprung. */
@@ -165,6 +177,9 @@ export const JUMP_BUTTON = "A";
 
 /** Oeffnet den Infobildschirm erneut - zum Nachschlagen der Steuerung. */
 export const INFO_BUTTON = "DPAD_DOWN";
+
+/** Startet nach dem Sieg den Erkundungsmodus (beschriftet "I"). */
+export const EXPLORE_BUTTON = "X";
 
 /** Wie nah man rankommen muss, um markieren zu koennen (mm). */
 export const SENSOR_RADIUS_MM = 7;
@@ -178,6 +193,41 @@ export function buildSensors() {
     ...sensor,
     radius: SENSOR_RADIUS_MM * MM,
     position: modelMmToWorld(sensor.x, sensor.y, LEVELS[sensor.side].walkZ, sensor.side),
+  }));
+}
+
+/**
+ * Weitere Infineon-Bauteile fuer den Erkundungsmodus, alle auf der Unterseite.
+ * Koordinaten aus Draufsichten des Modells abgemessen (CAD-XY in mm).
+ * `sizeMm` ist die Rahmengroesse, `radiusMm` die Reichweite der Info-Box.
+ */
+export const COMPONENTS = [
+  // ESD-Schutzdioden, je drei um die vier unteren Sensoren
+  { id: "D1", info: "esd", x: -25.6, y: 6.5, sizeMm: 1.6, radiusMm: 2 },
+  { id: "D2", info: "esd", x: 20.4, y: 6.9, sizeMm: 1.6, radiusMm: 2 },
+  { id: "D3", info: "esd", x: -51.4, y: 43.2, sizeMm: 1.6, radiusMm: 2 },
+  { id: "D4", info: "esd", x: 46.4, y: 43.8, sizeMm: 1.6, radiusMm: 2 },
+  { id: "D5", info: "esd", x: -26.4, y: 3.6, sizeMm: 1.6, radiusMm: 2 },
+  { id: "D6", info: "esd", x: 20.5, y: 4.1, sizeMm: 1.6, radiusMm: 2 },
+  { id: "D7", info: "esd", x: -47.9, y: 41.4, sizeMm: 1.6, radiusMm: 2 },
+  { id: "D8", info: "esd", x: 52.5, y: 42.1, sizeMm: 1.6, radiusMm: 2 },
+  { id: "D9", info: "esd", x: -21.0, y: 8.1, sizeMm: 1.6, radiusMm: 2 },
+  { id: "D10", info: "esd", x: 23.0, y: 0.4, sizeMm: 1.6, radiusMm: 2 },
+  { id: "D11", info: "esd", x: -51.6, y: 41.1, sizeMm: 1.6, radiusMm: 2 },
+  { id: "D12", info: "esd", x: 50.3, y: 40.8, sizeMm: 1.6, radiusMm: 2 },
+  { id: "U1", info: "capsense", x: 25.0, y: 35.5, sizeMm: 5.5, radiusMm: 4.5 },
+  { id: "IC4", info: "usb", x: -11.5, y: 4.2, sizeMm: 5.5, radiusMm: 4.5 },
+  { id: "IC1", info: "ldo", x: -64.0, y: -28.5, sizeMm: 10, radiusMm: 6.5 },
+  { id: "U2", info: "psoc", x: 0, y: 42.5, sizeMm: 24, radiusMm: 12 },
+];
+
+/** Bauteil-Daten in Weltkoordinaten. */
+export function buildComponents() {
+  return COMPONENTS.map((part) => ({
+    ...part,
+    side: "bottom",
+    radius: part.radiusMm * MM,
+    position: modelMmToWorld(part.x, part.y, LEVELS.bottom.walkZ, "bottom"),
   }));
 }
 

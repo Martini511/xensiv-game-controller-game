@@ -2,13 +2,30 @@ import * as THREE from "three";
 
 /**
  * Kollisionsaufloesung in der XZ-Ebene: der Charakter ist von oben betrachtet
- * ein Kreis, Bauteile sind achsenparallele Rechtecke. Aufgeloest wird ueber die
- * kleinste Eindringtiefe, damit man an Kanten entlanggleitet.
+ * ein *gedrehtes* Rechteck (der Chip ist deutlich breiter als lang), Bauteile
+ * sind achsenparallele Rechtecke.
+ *
+ * Verfahren: Separating Axis Theorem ueber vier Achsen - die beiden Weltachsen
+ * und die beiden Achsen des gedrehten Charakters. Geschoben wird entlang der
+ * Achse mit der geringsten Ueberlappung (Minimum Translation Vector), dadurch
+ * gleitet man an Kanten entlang statt haengenzubleiben.
  *
  * Rechtecke, deren Oberkante nicht ueber den Fuessen liegt, werden ignoriert -
  * auf denen steht man bereits drauf.
+ *
+ * @param {THREE.Vector3} position wird in-place korrigiert
+ * @param {THREE.Vector2} halfExtents halbe Kantenlaengen in Charakter-Koordinaten
+ * @param {number} angle Drehung des Charakters um die Y-Achse
  */
-export function resolveCircleVsBoxes(position, radius, boxes, feetY, passes = 2) {
+export function resolveBoxVsBoxes(position, halfExtents, angle, boxes, feetY, passes = 2) {
+  // Lokale Achsen des Charakters in Weltkoordinaten (Drehung um Y)
+  const ux = Math.cos(angle);
+  const uz = -Math.sin(angle);
+  const vx = Math.sin(angle);
+  const vz = Math.cos(angle);
+  const hx = halfExtents.x;
+  const hz = halfExtents.y;
+
   let blocked = false;
 
   for (let pass = 0; pass < passes; pass++) {
@@ -17,24 +34,38 @@ export function resolveCircleVsBoxes(position, radius, boxes, feetY, passes = 2)
     for (const box of boxes) {
       if (box.top <= feetY + 0.001) continue;
 
-      const minX = box.minX - radius;
-      const maxX = box.maxX + radius;
-      const minZ = box.minZ - radius;
-      const maxZ = box.maxZ + radius;
+      const ex = (box.maxX - box.minX) / 2;
+      const ez = (box.maxZ - box.minZ) / 2;
+      const dx = position.x - (box.minX + box.maxX) / 2;
+      const dz = position.z - (box.minZ + box.maxZ) / 2;
 
-      if (position.x <= minX || position.x >= maxX) continue;
-      if (position.z <= minZ || position.z >= maxZ) continue;
+      // Ueberlappung je Achse; ein negativer Wert trennt die Formen bereits.
+      const overlapX = hx * Math.abs(ux) + hz * Math.abs(vx) + ex - Math.abs(dx);
+      if (overlapX <= 0) continue;
+      const overlapZ = hx * Math.abs(uz) + hz * Math.abs(vz) + ez - Math.abs(dz);
+      if (overlapZ <= 0) continue;
 
-      const toLeft = position.x - minX;
-      const toRight = maxX - position.x;
-      const toBack = position.z - minZ;
-      const toFront = maxZ - position.z;
-      const smallest = Math.min(toLeft, toRight, toBack, toFront);
+      const du = dx * ux + dz * uz;
+      const overlapU = hx + ex * Math.abs(ux) + ez * Math.abs(uz) - Math.abs(du);
+      if (overlapU <= 0) continue;
+      const dv = dx * vx + dz * vz;
+      const overlapV = hz + ex * Math.abs(vx) + ez * Math.abs(vz) - Math.abs(dv);
+      if (overlapV <= 0) continue;
 
-      if (smallest === toLeft) position.x = minX;
-      else if (smallest === toRight) position.x = maxX;
-      else if (smallest === toBack) position.z = minZ;
-      else position.z = maxZ;
+      const smallest = Math.min(overlapX, overlapZ, overlapU, overlapV);
+      if (smallest === overlapX) {
+        position.x += dx >= 0 ? overlapX : -overlapX;
+      } else if (smallest === overlapZ) {
+        position.z += dz >= 0 ? overlapZ : -overlapZ;
+      } else if (smallest === overlapU) {
+        const push = du >= 0 ? overlapU : -overlapU;
+        position.x += ux * push;
+        position.z += uz * push;
+      } else {
+        const push = dv >= 0 ? overlapV : -overlapV;
+        position.x += vx * push;
+        position.z += vz * push;
+      }
 
       corrected = true;
       blocked = true;

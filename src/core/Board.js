@@ -19,6 +19,16 @@ const KEPT_ATTRIBUTES = ["position", "normal", "uv"];
 const HEIGHT_CELL_SIZE = WORLD_PER_MM * 0.5;
 
 /**
+ * So viele uebereinanderliegende Flaechen merkt sich eine Rasterzelle. Ohne
+ * diese Schichten waere unter dem Display dessen Oberseite der "Boden" - man
+ * koennte nicht darunter hindurchlaufen.
+ */
+const MAX_LAYERS = 6;
+
+/** Flaechen, die dichter beieinander liegen, zaehlen als eine Schicht. */
+const LAYER_MERGE = WORLD_PER_MM * 0.6;
+
+/**
  * Kapselt das geladene Platinen-Modell:
  *  - bringt es in Weltkoordinaten (CAD Z-up, Meter -> Three.js Y-up, skaliert)
  *  - sortiert jedes Mesh nach Ober-/Unterseite
@@ -54,6 +64,7 @@ export class Board {
     // Die Unterseite wird beim Begehen um 180 Grad um Z gekippt - die
     // Kollisionsdaten muessen in derselben Orientierung vorliegen.
     const flip = new THREE.Matrix4().makeRotationZ(SIDE_FLIP_Z.bottom);
+    const sideMatrix = new THREE.Matrix4();
     const obstacleHeight = OBSTACLE_HEIGHT_MM * WORLD_PER_MM;
 
     const worldBox = new THREE.Box3();
@@ -101,8 +112,23 @@ export class Board {
 
         // Ragt in Kopfhoehe hinein -> blockiert. Sonst schwebt es ueber dem
         // Kopf (z.B. der Joystick-Kopf) und wird ignoriert.
-        if (sideBox.min.y < bucket.walkY + CHARACTER_HEIGHT) {
-          bucket.obstacles.push(footprint);
+        if (sideBox.min.y >= bucket.walkY + CHARACTER_HEIGHT) continue;
+
+        // Nur der Teil zaehlt, an dem der Chip wirklich anstoesst: hoeher als
+        // die Stufengrenze (darunter steigt er hinauf) und nicht hoeher als
+        // sein Kopf (darueber - etwa der Joystick-Kopf - laeuft er hindurch).
+        sideMatrix.copy(object.matrixWorld);
+        if (target === "bottom") sideMatrix.premultiply(flip);
+
+        const blocking = bandFootprint(
+          object,
+          sideMatrix,
+          bucket.walkY + obstacleHeight,
+          bucket.walkY + obstacleHeight + CHARACTER_HEIGHT
+        );
+        if (blocking) {
+          blocking.top = footprint.top;
+          bucket.obstacles.push(blocking);
         }
       }
 
@@ -182,15 +208,43 @@ export class Board {
   }
 
   /**
-   * Hoehe der begehbaren Oberflaeche an dieser Stelle. Gibt NaN zurueck, wo
-   * keine Platine ist - dort faellt der Charakter herunter.
+   * Hoechste begehbare Flaeche an dieser Stelle, die nicht ueber `maxY` liegt.
+   * Die Grenze waehlt zwischen den Schichten: unter dem Display liefert sie
+   * die Platine, oben darauf die Display-Oberseite. NaN, wenn nichts passt.
    */
-  sampleHeight(side, x, z) {
+  sampleHeight(side, x, z, maxY = Infinity) {
+    const base = this._cellBase(side, x, z);
+    if (base < 0) return NaN;
+
+    const data = this.heightFields[side].data;
+    let height = NaN;
+
+    for (let k = 0; k < MAX_LAYERS; k++) {
+      const value = data[base + k];
+      if (Number.isNaN(value) || value > maxY) continue;
+      if (Number.isNaN(height) || value > height) height = value;
+    }
+
+    return height;
+  }
+
+  /**
+   * Ob hier ueberhaupt Platine liegt - unabhaengig von der Hoehe. Nur wo das
+   * nicht gilt, faellt der Charakter herunter.
+   */
+  hasGround(side, x, z) {
+    const base = this._cellBase(side, x, z);
+    // Schichten werden luckenlos von unten aufgefuellt: Slot 0 leer = Zelle leer.
+    return base >= 0 && !Number.isNaN(this.heightFields[side].data[base]);
+  }
+
+  /** Index der ersten Schicht einer Zelle, oder -1 ausserhalb des Rasters. */
+  _cellBase(side, x, z) {
     const field = this.heightFields[side];
     const col = Math.floor((x - field.minX) / HEIGHT_CELL_SIZE);
     const row = Math.floor((z - field.minZ) / HEIGHT_CELL_SIZE);
-    if (col < 0 || row < 0 || col >= field.cols || row >= field.rows) return NaN;
-    return field.data[row * field.cols + col];
+    if (col < 0 || row < 0 || col >= field.cols || row >= field.rows) return -1;
+    return (row * field.cols + col) * MAX_LAYERS;
   }
 
   /** Blendet die abgewandte Seite aus und kippt die Platine passend. */
@@ -209,6 +263,9 @@ export class Board {
  * rechteckig) und nur so entsteht ausserhalb ein echtes Loch, in das der
  * Charakter faellt. Zellen ohne Treffer bleiben NaN.
  *
+ * Jede Zelle haelt mehrere Schichten, damit ueberdeckte Flaechen - die Platine
+ * unter dem Display - nicht von der Flaeche darueber verdeckt werden.
+ *
  * Zu hohe Flaechen werden uebersprungen, sonst waere die Oberkante des
  * Joystick-Kopfes der "Boden" unter ihm.
  */
@@ -217,34 +274,110 @@ function buildHeightField(groups, matrix, bounds, walkY) {
   const minZ = bounds.min.z - HEIGHT_CELL_SIZE;
   const cols = Math.ceil((bounds.max.x - minX) / HEIGHT_CELL_SIZE) + 1;
   const rows = Math.ceil((bounds.max.z - minZ) / HEIGHT_CELL_SIZE) + 1;
-  const data = new Float32Array(cols * rows).fill(NaN);
+  const data = new Float32Array(cols * rows * MAX_LAYERS).fill(NaN);
   const field = { data, cols, rows, minX, minZ, baseY: walkY };
   const limitY = walkY + MAX_GROUND_HEIGHT_MM * WORLD_PER_MM;
 
   const a = new THREE.Vector3();
   const b = new THREE.Vector3();
   const c = new THREE.Vector3();
+  const normal = new THREE.Vector3();
 
   for (const group of groups) {
     for (const mesh of group.children) {
       const position = mesh.geometry.attributes.position;
+      const normals = mesh.geometry.attributes.normal;
       const index = mesh.geometry.index;
       const count = index ? index.count : position.count;
 
       for (let i = 0; i < count; i += 3) {
-        a.fromBufferAttribute(position, index ? index.getX(i) : i).applyMatrix4(matrix);
-        b.fromBufferAttribute(position, index ? index.getX(i + 1) : i + 1).applyMatrix4(matrix);
-        c.fromBufferAttribute(position, index ? index.getX(i + 2) : i + 2).applyMatrix4(matrix);
+        const i0 = index ? index.getX(i) : i;
+        const i1 = index ? index.getX(i + 1) : i + 1;
+        const i2 = index ? index.getX(i + 2) : i + 2;
+
+        a.fromBufferAttribute(position, i0).applyMatrix4(matrix);
+        b.fromBufferAttribute(position, i1).applyMatrix4(matrix);
+        c.fromBufferAttribute(position, i2).applyMatrix4(matrix);
 
         // Komplette Dreiecke verwerfen, die ueber das Limit reichen - sonst
         // entstuenden an den Flanken hoher Bauteile Plateaus auf Limit-Hoehe.
         if (Math.max(a.y, b.y, c.y) > limitY) continue;
+
+        // Nach unten zeigende Flaechen sind Decken, kein Boden. Ohne diesen
+        // Filter waere die Unterseite des Displays eine begehbare Schicht.
+        normal
+          .set(
+            normals.getX(i0) + normals.getX(i1) + normals.getX(i2),
+            normals.getY(i0) + normals.getY(i1) + normals.getY(i2),
+            normals.getZ(i0) + normals.getZ(i1) + normals.getZ(i2)
+          )
+          .transformDirection(matrix);
+        if (normal.y <= 0) continue;
+
         rasterizeTriangle(a, b, c, field);
       }
     }
   }
 
   return field;
+}
+
+/**
+ * Legt eine Flaechenhoehe in einer Zelle ab. Dicht beieinander liegende
+ * Flaechen werden zu einer Schicht zusammengefasst.
+ */
+function insertLayer(data, base, height) {
+  let free = -1;
+
+  for (let k = 0; k < MAX_LAYERS; k++) {
+    const value = data[base + k];
+
+    if (Number.isNaN(value)) {
+      if (free < 0) free = k;
+      continue;
+    }
+
+    if (Math.abs(value - height) <= LAYER_MERGE) {
+      if (height > value) data[base + k] = height;
+      return;
+    }
+  }
+
+  if (free >= 0) {
+    data[base + free] = height;
+    return;
+  }
+
+  collapseClosest(data, base, height);
+}
+
+/** Scratch fuer das Zusammenlegen - spart eine Allokation je Dreieck. */
+const layerScratch = new Float64Array(MAX_LAYERS + 1);
+
+/**
+ * Zelle ist voll: die beiden dichtesten Schichten verschmelzen. Unterste und
+ * oberste Flaeche bleiben dabei immer erhalten.
+ */
+function collapseClosest(data, base, height) {
+  for (let k = 0; k < MAX_LAYERS; k++) layerScratch[k] = data[base + k];
+  layerScratch[MAX_LAYERS] = height;
+  layerScratch.sort();
+
+  let drop = 0;
+  let smallest = Infinity;
+
+  for (let k = 1; k <= MAX_LAYERS; k++) {
+    const gap = layerScratch[k] - layerScratch[k - 1];
+    if (gap < smallest) {
+      smallest = gap;
+      drop = k - 1;
+    }
+  }
+
+  let write = 0;
+  for (let k = 0; k <= MAX_LAYERS; k++) {
+    if (k !== drop) data[base + write++] = layerScratch[k];
+  }
 }
 
 /** Scanline-freie Variante: Zellmittelpunkte im Dreiecks-Bounding-Rechteck testen. */
@@ -278,8 +411,7 @@ function rasterizeTriangle(a, b, c, field) {
       if (w2 < 0 || w2 > 1) continue;
 
       const height = w0 * a.y + w1 * b.y + w2 * c.y;
-      const cell = offset + col;
-      if (!(data[cell] >= height)) data[cell] = height;
+      insertLayer(data, (offset + col) * MAX_LAYERS, height);
     }
   }
 }
@@ -331,6 +463,73 @@ const contains3D = (outer, inner) =>
   outer.maxY >= inner.maxY &&
   outer.minZ <= inner.minZ &&
   outer.maxZ >= inner.maxZ;
+
+/** Scratch fuer den Grundriss-Zuschnitt. */
+const edgeA = new THREE.Vector3();
+const edgeB = new THREE.Vector3();
+const edgeC = new THREE.Vector3();
+
+/**
+ * Grundriss der Geometrie im Hoehenband [minY, maxY] - also genau dort, wo der
+ * Chip anstoesst. Die Bounding-Box des ganzen Meshes waere viel zu grob: der
+ * Joystick-Kopf steht ringsum ueber seinem Sockel, und die Loetpins liegen
+ * flach auf der Platine.
+ *
+ * Dreiecke werden am Band beschnitten, damit auch senkrechte Waende zaehlen,
+ * deren Eckpunkte alle ausserhalb liegen.
+ */
+function bandFootprint(mesh, matrix, minY, maxY) {
+  const position = mesh.geometry.attributes.position;
+  const index = mesh.geometry.index;
+  const count = index ? index.count : position.count;
+
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minZ = Infinity;
+  let maxZ = -Infinity;
+
+  const add = (x, z) => {
+    if (x < minX) minX = x;
+    if (x > maxX) maxX = x;
+    if (z < minZ) minZ = z;
+    if (z > maxZ) maxZ = z;
+  };
+
+  for (let i = 0; i < count; i += 3) {
+    edgeA.fromBufferAttribute(position, index ? index.getX(i) : i).applyMatrix4(matrix);
+    edgeB.fromBufferAttribute(position, index ? index.getX(i + 1) : i + 1).applyMatrix4(matrix);
+    edgeC.fromBufferAttribute(position, index ? index.getX(i + 2) : i + 2).applyMatrix4(matrix);
+
+    if (Math.min(edgeA.y, edgeB.y, edgeC.y) > maxY) continue;
+    if (Math.max(edgeA.y, edgeB.y, edgeC.y) < minY) continue;
+
+    clipEdge(edgeA, edgeB, minY, maxY, add);
+    clipEdge(edgeB, edgeC, minY, maxY, add);
+    clipEdge(edgeC, edgeA, minY, maxY, add);
+  }
+
+  return minX === Infinity ? null : { minX, maxX, minZ, maxZ };
+}
+
+/** Uebergibt den Teil der Kante, der im Band liegt. */
+function clipEdge(p, q, minY, maxY, add) {
+  let t0 = 0;
+  let t1 = 1;
+  const dy = q.y - p.y;
+
+  if (Math.abs(dy) < 1e-9) {
+    if (p.y < minY || p.y > maxY) return;
+  } else {
+    const ta = (minY - p.y) / dy;
+    const tb = (maxY - p.y) / dy;
+    t0 = Math.max(t0, Math.min(ta, tb));
+    t1 = Math.min(t1, Math.max(ta, tb));
+    if (t0 > t1) return;
+  }
+
+  add(p.x + (q.x - p.x) * t0, p.z + (q.z - p.z) * t0);
+  add(p.x + (q.x - p.x) * t1, p.z + (q.z - p.z) * t1);
+}
 
 /** Klont die Geometrie und backt die Welt-Transformation des Meshes ein. */
 function bakeGeometry(mesh, stripAttributes) {

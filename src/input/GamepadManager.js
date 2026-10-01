@@ -68,8 +68,8 @@ export const BUTTON_INDEX = {
 /** Beschriftung auf diesem Controller weicht bei A und Y ab. */
 export const BUTTON_LABELS = {
   A: "F",
-  B: "B",
-  X: "X",
+  B: "X",
+  X: "I",
   Y: "T",
   L1: "L1",
   R1: "R1",

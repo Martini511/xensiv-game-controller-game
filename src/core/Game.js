@@ -13,19 +13,23 @@ import {
 } from "./model-loader.js";
 import {
   ACTION_BUTTON,
+  EXPLORE_BUTTON,
+  FALL_COMMIT_MM,
   FALL_DEATH_Y,
   INFO_BUTTON,
   JUMP_BUTTON,
+  OBSTACLE_HEIGHT_MM,
   OPPOSITE_SIDE,
   PORTAL,
   SENSOR_MARKER_MM,
   WORLD_PER_MM,
+  buildComponents,
   buildLevel,
   buildPortals,
   buildSensors,
   buildSpawn,
 } from "./level-config.js";
-import { clampDistanceToBoxes, resolveCircleVsBoxes } from "./collision.js";
+import { clampDistanceToBoxes, resolveBoxVsBoxes } from "./collision.js";
 import { Character } from "../entities/Character.js";
 import { ChipModel } from "../entities/ChipModel.js";
 import { PortalMarker } from "../entities/PortalMarker.js";
@@ -33,17 +37,42 @@ import { SensorMarker } from "../entities/SensorMarker.js";
 import { BUTTON_LABELS, GamepadManager } from "../input/GamepadManager.js";
 import { DebugOverlay } from "../input/DebugOverlay.js";
 import { FadeOverlay, LoadingOverlay } from "../ui/overlays.js";
-import { MessageOverlay, MissionHud, Prompt, TitleScreen } from "../ui/hud.js";
-import { BRIEFING, FAILURE, TITLE, VICTORY } from "./mission-texts.js";
+import { InfoBox, MessageOverlay, MissionHud, Prompt, TitleScreen } from "../ui/hud.js";
+import { addScore, formatTime, loadScores } from "./leaderboard.js";
+import { BRIEFING, COMPONENT_INFO, EXPLORE, FAILURE, TITLE, VICTORY } from "./mission-texts.js";
 
 const MAX_DELTA = 0.1; // Sekunden - verhindert Riesenspruenge nach Tab-Wechsel
 
 /** Wie schnell der Charakter auf eine neue Bodenhoehe nachzieht (1/Sekunde). */
 const GROUND_DAMPING = 16;
 
-/** Fallbeschleunigung und Absprunggeschwindigkeit in Weltunits/s(^2). */
+/**
+ * Fallbeschleunigung und Absprunggeschwindigkeit in Weltunits/s(^2).
+ * Sprunghoehe = JUMP_SPEED^2 / (2 * |GRAVITY|) = 2.4 Units = 6 mm - genug fuer
+ * Display und Steckverbinder, zu wenig fuer die Joysticks.
+ */
 const GRAVITY = -30;
-const JUMP_SPEED = 9;
+const JUMP_SPEED = 12;
+
+/** Rasterpunkte je Achse, mit denen der Boden unter dem Grundriss abgetastet wird. */
+const GROUND_SAMPLES = 5;
+
+/**
+ * Anteil der Rasterpunkte, die Boden brauchen, damit die Figur stehen bleibt.
+ * Darunter kippt sie ins Loch - bei 0.5 faellt sie genau dann, wenn mehr als
+ * die Haelfte des Grundrisses ueber Leere haengt.
+ */
+const MIN_SUPPORT_RATIO = 0.5;
+
+/**
+ * Maximale Stufe, die im Gehen genommen wird. Hoehere Flaechen tragen zwar
+ * (man faellt davor nicht ins Leere), sind aber nur per Sprung erreichbar.
+ * Identisch mit der Hindernis-Grenze, damit beides zusammenpasst.
+ */
+const STEP_UP_LIMIT = OBSTACLE_HEIGHT_MM * WORLD_PER_MM;
+
+/** Fallhoehe unter der Laufebene, ab der der Sturz nicht mehr zu retten ist. */
+const FALL_COMMIT_DEPTH = FALL_COMMIT_MM * WORLD_PER_MM;
 
 /**
  * Zentrale Klasse: haelt Szene, Kamera, Input und Entities zusammen und
@@ -95,12 +124,20 @@ export class Game {
     this.fadeOverlay = new FadeOverlay(document.body, PORTAL.fadeDurationMs);
     this.missionHud = new MissionHud(document.body);
     this.prompt = new Prompt(document.body);
+    this.infoBox = new InfoBox(document.body);
     this.message = new MessageOverlay(document.body);
     this.titleScreen = null;
 
     /** "intro" | "briefing" | "playing" | "falling" | "failed" | "won" */
     this.state = "intro";
     this.sensors = buildSensors().map((sensor) => ({ ...sensor, marked: false, marker: null }));
+    /** Weitere Bauteile; `marked` heisst hier "im Erkundungsmodus entdeckt". */
+    this.components = buildComponents().map((part) => ({ ...part, marked: false, marker: null }));
+    /** "mission" bis zum Sieg, danach optional "explore". */
+    this.mode = "mission";
+    this._results = null;
+    /** Laufzeit in Sekunden; laeuft nur waehrend des aktiven Spiels. */
+    this.runTime = 0;
 
     this.board = null;
     this.portalMarker = null;
@@ -142,6 +179,8 @@ export class Game {
 
       const chip = new ChipModel(player.scene);
       this.character.setModel(chip.object3D, chip);
+      // Hitbox folgt dem Modell, damit beide beim Skalieren nicht auseinanderlaufen.
+      this.character.halfExtents.copy(chip.halfExtents);
 
       this.board = new Board(gltf.scene);
       this.scene.add(this.board.object3D);
@@ -149,6 +188,7 @@ export class Game {
 
       this._createPortalMarker();
       this._createSensorMarkers();
+      this._createComponentMarkers();
       this._setSide("top");
       this.cameraRig.snapToTarget();
       this.missionHud.update(this.sensors);
@@ -201,10 +241,16 @@ export class Game {
         this.intro.finish();
       }
     } else if (this.state === "playing") {
-      if (input.buttons[INFO_BUTTON].justPressed) this._openInfo();
+      if (input.buttons[INFO_BUTTON].justPressed) {
+        if (this.mode === "explore") this._showResults();
+        else this._openInfo();
+      }
     } else if (this.state !== "falling") {
       // Briefing, Sieg und Absturz warten alle auf die Aktionstaste
       if (input.buttons[ACTION_BUTTON].justPressed) this._confirmMessage();
+      else if (this.state === "won" && input.buttons[EXPLORE_BUTTON].justPressed) {
+        this._startExplore();
+      }
     }
 
     // Waehrend Intro, Ueberblendung, Infobildschirm und Endbildschirm ist die
@@ -212,17 +258,22 @@ export class Game {
     const locked =
       this._isTransitioning || introRunning || this.state === "briefing" || this.isGameOver;
 
+    // Die Uhr laeuft nur im aktiven Spiel - Infobildschirm pausiert sie.
+    if (this.mode === "mission" && (this.state === "playing" || this.state === "falling")) {
+      this.runTime += deltaTime;
+    }
+
     // 2. Kamera-Rotation aus dem rechten Stick
     if (!locked) {
       this.cameraRig.rotate(input.rightStick.x, input.rightStick.y, deltaTime);
     }
 
     // 3. Bewegung aus dem linken Stick - relativ zur Kamera-Ausrichtung.
-    // Auch im Fall steuerbar: wer schnell genug zurueck ueber die Platine
-    // kommt, landet wieder darauf.
-    this._applyMovementInput(locked ? { x: 0, y: 0 } : input.leftStick);
+    // Wer stuerzt, hat die Kontrolle verloren - der Fall ist nicht zu retten.
+    const steerable = !locked && this.state !== "falling";
+    this._applyMovementInput(steerable ? input.leftStick : { x: 0, y: 0 });
 
-    if (!locked && input.buttons[JUMP_BUTTON].justPressed) this._jump();
+    if (steerable && input.buttons[JUMP_BUTTON].justPressed) this._jump();
 
     // 4. Entities updaten, danach auf die aktuelle Ebene zwingen
     this.character.update(deltaTime);
@@ -232,6 +283,7 @@ export class Game {
     // 5. Interaktionen auswerten
     this._updatePortal(input, locked);
     this._updateSensors(input, locked);
+    this._updateInfo(locked);
     this.portalMarker?.update(this._clock.elapsedTime);
 
     if (introRunning) {
@@ -244,6 +296,12 @@ export class Game {
 
     // 6. Anzeigen + Rendern
     this.prompt.set(this._promptText());
+    if (this.mode === "explore") {
+      const found = this.components.filter((part) => part.marked).length;
+      this.missionHud.showExplore(found, this.components.length);
+    } else {
+      this.missionHud.update(this.sensors, formatTime(this.runTime));
+    }
     this.debugOverlay.update(input, {
       fps: this._fps.toFixed(0),
       seite: this.currentSide,
@@ -275,13 +333,14 @@ export class Game {
     this.state = "briefing";
     this.titleScreen?.hide();
     this.titleScreen = null;
-    this.message.show(BRIEFING);
+    this.runTime = 0;
+    this.message.show({ ...BRIEFING, scores: loadScores() });
   }
 
-  /** Infobildschirm im laufenden Spiel erneut oeffnen. */
+  /** Infobildschirm im laufenden Spiel erneut oeffnen - die Uhr pausiert dabei. */
   _openInfo() {
     this.state = "briefing";
-    this.message.show(BRIEFING);
+    this.message.show({ ...BRIEFING, scores: loadScores() });
   }
 
   /** Aktionstaste auf Briefing / Endbildschirm. */
@@ -319,9 +378,10 @@ export class Game {
     if (!this.board || this.state === "falling") return;
 
     const position = this.character.position;
-    resolveCircleVsBoxes(
+    resolveBoxVsBoxes(
       position,
-      this.character.radius,
+      this.character.halfExtents,
+      this.character.object3D.rotation.y,
       this.board.obstacles[this.currentSide],
       position.y
     );
@@ -333,7 +393,8 @@ export class Game {
    */
   _updateGrounding(deltaTime) {
     const position = this.character.position;
-    const groundY = this._groundHeight();
+    // Ein begonnener Sturz kennt keinen Boden mehr.
+    const groundY = this.state === "falling" ? NaN : this._groundHeight();
     const overVoid = Number.isNaN(groundY);
 
     if (this._isGrounded && !overVoid) {
@@ -341,10 +402,9 @@ export class Game {
       return;
     }
 
-    if (this._isGrounded && overVoid) {
+    if (this._isGrounded) {
       this._isGrounded = false;
       this._verticalVelocity = 0;
-      if (this.state === "playing") this.state = "falling";
     }
 
     this._verticalVelocity += GRAVITY * deltaTime;
@@ -354,11 +414,22 @@ export class Game {
       position.y = groundY;
       this._verticalVelocity = 0;
       this._isGrounded = true;
-      if (this.state === "falling") this.state = "playing";
       return;
     }
 
-    if (position.y < FALL_DEATH_Y && this.state === "falling") this._fail();
+    // Sackt die Figur merklich unter ihre Laufebene, war es kein Sprung ueber
+    // ein Loch mehr, sondern einer hindurch.
+    if (
+      this.state === "playing" &&
+      position.y < this.levels[this.currentSide].y - FALL_COMMIT_DEPTH
+    ) {
+      this.state = "falling";
+    }
+
+    if (position.y < FALL_DEATH_Y && this.state === "falling") {
+      if (this.mode === "explore") this._respawn();
+      else this._fail();
+    }
   }
 
   _jump() {
@@ -368,10 +439,69 @@ export class Game {
   }
 
   _groundHeight() {
+    if (!this.board) return this.levels[this.currentSide].y;
+
+    const { height, support } = this._sampleGround(this.character.position.y + STEP_UP_LIMIT);
+    if (support < MIN_SUPPORT_RATIO) return NaN;
+    // Zu hohe Flaechen tragen nur, wer schon steht. In der Luft waere das eine
+    // unsichtbare Plattform mitten im Bohrloch.
+    if (Number.isNaN(height)) return this._isGrounded ? this.character.position.y : NaN;
+    return height;
+  }
+
+  /**
+   * Setzt die Figur beim Spawn oder Teleport auf die Oberflaeche unter ihr.
+   * Hier gilt die Stufengrenze *nicht* - sonst wuerde sie z.B. auf dem Display
+   * nicht oben landen, sondern darin stecken und herausgeschoben werden.
+   */
+  _snapToGround() {
+    if (!this.board) return;
+
+    const { height } = this._sampleGround(Infinity);
+    if (!Number.isNaN(height)) this.character.position.y = height;
+  }
+
+  /**
+   * Tastet den Boden ueber den gesamten - mitgedrehten - Grundriss ab.
+   * Massgeblich ist der *hoechste* Treffer unterhalb von `stepLimit`: der Chip
+   * ist ein starrer Koerper und sinkt nicht in Bauteile ein, klettert aber
+   * auch nicht von selbst auf hohe hinauf.
+   */
+  _sampleGround(stepLimit) {
     const position = this.character.position;
-    return this.board
-      ? this.board.sampleHeight(this.currentSide, position.x, position.z)
-      : this.levels[this.currentSide].y;
+    const angle = this.character.object3D.rotation.y;
+    const cos = Math.cos(angle);
+    const sin = Math.sin(angle);
+    const { x: halfX, y: halfZ } = this.character.halfExtents;
+
+    let height = NaN;
+    let supported = 0;
+    let total = 0;
+
+    for (let i = 0; i < GROUND_SAMPLES; i++) {
+      const localX = ((i / (GROUND_SAMPLES - 1)) * 2 - 1) * halfX;
+
+      for (let j = 0; j < GROUND_SAMPLES; j++) {
+        const localZ = ((j / (GROUND_SAMPLES - 1)) * 2 - 1) * halfZ;
+        const sampleX = position.x + localX * cos + localZ * sin;
+        const sampleZ = position.z - localX * sin + localZ * cos;
+
+        total++;
+        if (!this.board.hasGround(this.currentSide, sampleX, sampleZ)) continue;
+
+        // Traegt die Figur, auch wenn zu hoch zum Hochsteigen - sonst wuerde
+        // sie direkt neben einem Bauteil ins Leere kippen.
+        supported++;
+
+        // Die Stufengrenze waehlt die Schicht: unter dem Display die Platine,
+        // oben darauf die Display-Oberseite.
+        const sample = this.board.sampleHeight(this.currentSide, sampleX, sampleZ, stepLimit);
+        if (Number.isNaN(sample)) continue;
+        if (Number.isNaN(height) || sample > height) height = sample;
+      }
+    }
+
+    return { height, support: supported / total };
   }
 
   /** Prueft die Triggerzone der Kontrollflaeche und startet ggf. den Wechsel. */
@@ -427,6 +557,47 @@ export class Game {
     }
   }
 
+  /**
+   * Info-Box zum naechstgelegenen Bauteil. Im Auftrag nur die Sensoren, im
+   * Erkundungsmodus alle Bauteile - die dabei als entdeckt gelten.
+   */
+  _updateInfo(locked) {
+    const active = this.state === "playing" && !locked;
+    const exploring = this.mode === "explore";
+    const points = exploring ? [...this.sensors, ...this.components] : this.sensors;
+
+    let nearest = null;
+    let nearestDistance = Infinity;
+
+    for (const point of points) {
+      if (point.side !== this.currentSide) continue;
+
+      const distance = Math.hypot(
+        this.character.position.x - point.position.x,
+        this.character.position.z - point.position.z
+      );
+      const inRange = active && distance <= point.radius;
+      if (inRange && distance < nearestDistance) {
+        nearest = point;
+        nearestDistance = distance;
+      }
+    }
+
+    if (exploring) {
+      if (nearest && !nearest.marked) {
+        nearest.marked = true;
+        nearest.marker.marked = true;
+      }
+      for (const part of this.components) {
+        part.marker.inRange = part === nearest;
+        part.marker.update(this._clock.elapsedTime);
+      }
+    }
+
+    this.infoBox.setProminent(exploring);
+    this.infoBox.show(nearest, nearest && COMPONENT_INFO[nearest.info]);
+  }
+
   _markSensor(sensor) {
     sensor.marked = true;
     sensor.marker.marked = true;
@@ -439,7 +610,46 @@ export class Game {
 
   _win() {
     this.state = "won";
-    this.message.show(VICTORY);
+    const { scores, rank } = addScore(this.runTime);
+    this._results = {
+      ...VICTORY,
+      body: [...VICTORY.body, `Your time: ${formatTime(this.runTime)}`],
+      scores,
+      highlight: rank,
+    };
+    this.message.show(this._results);
+  }
+
+  /** Nach dem Sieg: frei herumlaufen und alle Infineon-Bauteile entdecken. */
+  _startExplore() {
+    if (this.mode === "explore") {
+      this.message.hide();
+      this.state = "playing";
+      return;
+    }
+
+    this.mode = "explore";
+    // Immer voll sichtbar - hier wird entdeckt, nicht gesucht.
+    for (const part of this.components) part.marker.proximity = 1;
+    this._updateMarkerVisibility();
+    this.state = "briefing";
+    this.message.show(EXPLORE);
+  }
+
+  /** Aus dem Erkundungsmodus zurueck zum Ergebnis - von dort geht's weiter. */
+  _showResults() {
+    this.state = "won";
+    this.message.show(this._results);
+  }
+
+  /** Absturz im Erkundungsmodus: zurueck auf die Kontrollflaeche dieser Seite. */
+  _respawn() {
+    const portal = this.portals[this.currentSide];
+    this.character.position.set(portal.position.x, this.levels[this.currentSide].y, portal.position.z);
+    this.character.setMoveDirection(0, 0, 0);
+    this._setSide(this.currentSide);
+    this.cameraRig.snapToTarget();
+    this.state = "playing";
   }
 
   _fail() {
@@ -449,16 +659,18 @@ export class Game {
 
   /** Zuruecksetzen nach Absturz oder Sieg. */
   _restart() {
-    for (const sensor of this.sensors) {
-      sensor.marked = false;
-      sensor.marker.reset();
+    for (const point of [...this.sensors, ...this.components]) {
+      point.marked = false;
+      point.marker.reset();
     }
+    this.mode = "mission";
     this.missionHud.update(this.sensors);
 
     this.character.position.copy(buildSpawn("top"));
     this.character.setMoveDirection(0, 0, 0);
     this._verticalVelocity = 0;
     this._isGrounded = true;
+    this.runTime = 0;
     this._setSide("top");
     this.cameraRig.snapToTarget();
     this.state = "playing";
@@ -495,6 +707,29 @@ export class Game {
     }
   }
 
+  /** Rahmen fuer die Bauteile des Erkundungsmodus - bis dahin ausgeblendet. */
+  _createComponentMarkers() {
+    for (const part of this.components) {
+      const marker = new SensorMarker({ size: part.sizeMm * WORLD_PER_MM });
+      // Auf Platinenhoehe: der Rahmen umschliesst das Bauteil, statt darauf zu liegen.
+      marker.object3D.position.set(part.position.x, this.levels[part.side].y + 0.03, part.position.z);
+      marker.object3D.visible = false;
+      this.scene.add(marker.object3D);
+      part.marker = marker;
+    }
+  }
+
+  _updateMarkerVisibility() {
+    for (const sensor of this.sensors) {
+      if (sensor.marker) sensor.marker.object3D.visible = sensor.side === this.currentSide;
+    }
+    for (const part of this.components) {
+      if (part.marker) {
+        part.marker.object3D.visible = this.mode === "explore" && part.side === this.currentSide;
+      }
+    }
+  }
+
   /** Fade-to-Black, Teleport auf die andere Seite, Fade zurueck. */
   async _switchSide() {
     const target = OPPOSITE_SIDE[this.currentSide];
@@ -515,15 +750,12 @@ export class Game {
     this.currentSide = side;
     this.board?.setVisibleSide(side);
 
-    const ground = this._groundHeight();
-    if (!Number.isNaN(ground)) this.character.position.y = ground;
+    this._snapToGround();
     this._verticalVelocity = 0;
     this._isGrounded = true;
 
     if (this.portalMarker) this.portalMarker.visible = side === "bottom";
-    for (const sensor of this.sensors) {
-      if (sensor.marker) sensor.marker.object3D.visible = sensor.side === side;
-    }
+    this._updateMarkerVisibility();
   }
 }
 

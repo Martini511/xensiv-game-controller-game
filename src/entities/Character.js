@@ -13,8 +13,8 @@ export class Character {
   constructor(options = {}) {
     this.moveSpeed = options.moveSpeed ?? 6;
     this.turnDamping = options.turnDamping ?? 12;
-    /** Radius fuer die Kollision in der XZ-Ebene (etwas ueber dem Mesh-Radius). */
-    this.radius = options.radius ?? 0.8;
+    /** Halbe Kantenlaengen der Hitbox in Charakter-Koordinaten (X = quer, Z = laengs). */
+    this.halfExtents = new THREE.Vector2(options.halfX ?? 0.4, options.halfZ ?? 0.4);
 
     this.object3D = new THREE.Group();
     this.object3D.name = "Character";

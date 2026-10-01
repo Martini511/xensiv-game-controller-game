@@ -125,6 +125,16 @@
         font-weight: 600;
       }
 
+      #mission-hud .mission-time {
+        margin-bottom: 8px;
+        padding-bottom: 6px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        color: #ffffff;
+        font-size: 17px;
+        letter-spacing: 0.08em;
+        font-variant-numeric: tabular-nums;
+      }
+
       #mission-hud .sensor-row {
         opacity: 0.45;
       }
@@ -132,6 +142,121 @@
       #mission-hud .sensor-row.is-found {
         color: #7ee787;
         opacity: 1;
+      }
+
+      #info-box {
+        position: fixed;
+        left: 12px;
+        bottom: 12px;
+        z-index: 10;
+        width: 300px;
+        padding: 12px 16px 14px;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-left: 3px solid #ffd166;
+        border-radius: 8px;
+        background: rgba(10, 14, 20, 0.86);
+        backdrop-filter: blur(4px);
+        color: #d6e1f0;
+        font-size: 13px;
+        line-height: 1.4;
+        pointer-events: none;
+        user-select: none;
+      }
+
+      #info-box[hidden] {
+        display: none;
+      }
+
+      #info-box .info-title {
+        color: #ffffff;
+        font-size: 15px;
+        font-weight: 600;
+      }
+
+      #info-box .info-tag {
+        margin-top: 2px;
+        color: #8b98a9;
+        font-family: "Cascadia Mono", "Consolas", monospace;
+        font-size: 11px;
+        letter-spacing: 0.06em;
+      }
+
+      #info-box .info-section {
+        margin: 10px 0 4px;
+        padding-top: 8px;
+        border-top: 1px solid rgba(255, 255, 255, 0.1);
+        color: #ffd166;
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      #info-box .info-product + .info-product {
+        margin-top: 6px;
+      }
+
+      #info-box .info-name {
+        font-weight: 600;
+      }
+
+      #info-box .info-product.is-used .info-name {
+        color: #7ee787;
+      }
+
+      #info-box .info-type {
+        color: #a9b6c7;
+      }
+
+      #info-box .info-product.is-soon {
+        opacity: 0.6;
+        font-style: italic;
+      }
+
+      #info-box.is-prominent {
+        left: 24px;
+        bottom: 24px;
+        width: 440px;
+        padding: 22px 26px 24px;
+        border: 1px solid rgba(126, 231, 135, 0.35);
+        border-left: 6px solid #7ee787;
+        border-radius: 12px;
+        background: rgba(8, 12, 18, 0.94);
+        box-shadow:
+          0 0 0 1px rgba(126, 231, 135, 0.08),
+          0 12px 40px rgba(0, 0, 0, 0.55),
+          0 0 32px rgba(126, 231, 135, 0.18);
+        font-size: 16px;
+        line-height: 1.45;
+      }
+
+      #info-box.is-prominent .info-title {
+        font-size: 24px;
+        letter-spacing: 0.01em;
+      }
+
+      #info-box.is-prominent .info-tag {
+        margin-top: 4px;
+        font-size: 13px;
+      }
+
+      #info-box.is-prominent .info-section {
+        margin: 16px 0 8px;
+        padding-top: 12px;
+        color: #7ee787;
+        font-size: 13px;
+      }
+
+      #info-box.is-prominent .info-product.is-used .info-name {
+        font-size: 21px;
+      }
+
+      #info-box.is-prominent .info-product.is-used .info-type {
+        font-size: 17px;
+      }
+
+      #info-box.is-prominent .info-product + .info-product {
+        margin-top: 10px;
       }
 
       #prompt {
@@ -236,6 +361,43 @@
 
       .control-action {
         color: #aebdd0;
+      }
+
+      .score-table {
+        margin-top: 16px;
+        padding-top: 14px;
+        border-top: 1px solid rgba(255, 255, 255, 0.1);
+        font-size: 13px;
+      }
+
+      .score-head {
+        margin-bottom: 6px;
+        color: #ffd166;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .score-row {
+        display: grid;
+        grid-template-columns: 28px 1fr auto;
+        gap: 10px;
+        padding: 2px 0;
+        color: #aebdd0;
+        font-family: "Cascadia Mono", "Consolas", monospace;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .score-row.is-new {
+        color: #7ee787;
+        font-weight: 600;
+      }
+
+      .score-time {
+        color: inherit;
+      }
+
+      .score-date {
+        opacity: 0.55;
       }
 
       #title-screen {

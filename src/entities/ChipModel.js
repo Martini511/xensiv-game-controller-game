@@ -10,12 +10,14 @@ import * as THREE from "three";
  */
 
 /**
- * Zielbreite des Chips in Weltunits. Das GLB bringt eine eigene
- * Einheitenskalierung mit, deshalb wird nicht mit einem festen Faktor
- * gerechnet, sondern auf diese Breite normiert - etwa die Groesse, die ein
- * SO-8 auf dieser Platine haette.
+ * Zielbreite des Chips in Weltunits. 1 mm Platine = 0.4 Units, 1.0 entspricht
+ * also 2.5 mm. Bewusst kleiner als die Platinenbohrungen (3.0 mm) - nur so
+ * sind die Loecher eine echte Gefahr und nicht bloss eine Delle. Das GLB
+ * bringt eine eigene Einheitenskalierung mit, deshalb wird darauf normiert
+ * statt mit einem festen Faktor gerechnet.
+ * >>> Einzige Stellschraube fuer die Spielergroesse, die Hitbox zieht mit. <<<
  */
-const TARGET_WIDTH = 2.0;
+const TARGET_WIDTH = 1.0;
 
 /** Das Modell ist wie die Platine Z-up (CAD-Export). */
 const MODEL_ROTATION_X = -Math.PI / 2;
@@ -66,6 +68,11 @@ export class ChipModel {
     const center = bounds.getCenter(new THREE.Vector3());
     const scale = targetWidth / Math.max(size.x, size.y);
 
+    // Modell ist Z-up: x und y bilden den Grundriss. x bleibt die lokale
+    // X-Achse, y wird durch die Z-up-Drehung zur lokalen Z-Achse.
+    this.footprint = new THREE.Vector2(size.x * scale, size.y * scale);
+    this.halfExtents = new THREE.Vector2(this.footprint.x / 2, this.footprint.y / 2);
+
     const root = new THREE.Group();
     root.rotation.x = MODEL_ROTATION_X;
     root.scale.setScalar(scale);
@@ -91,7 +98,7 @@ export class ChipModel {
 
     console.log(
       `[Spieler] ${this.legs.length} Pins als Beine gerigged, ` +
-        `Modell ${size.toArray().map((v) => v.toFixed(3)).join(" x ")} -> Faktor ${scale.toFixed(1)}.`
+        `Grundriss ${this.footprint.x.toFixed(2)} x ${this.footprint.y.toFixed(2)} Units.`
     );
   }
 
