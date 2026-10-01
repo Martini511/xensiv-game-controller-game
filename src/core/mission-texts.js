@@ -44,6 +44,9 @@ export const BRIEFING = {
   tone: "neutral",
 };
 
+/** Fusszeile des allerersten Briefings - nur dort laesst sich die Jagd ueberspringen. */
+export const BRIEFING_START_FOOTER = `Press ${T} to start the hunt \u00b7 press ${I} to just explore the board`;
+
 export const VICTORY = {
   title: "All sensors found",
   body: [
@@ -57,13 +60,21 @@ export const VICTORY = {
 export const EXPLORE = {
   title: "Explore mode",
   body: [
-    "The hunt is over - take your time. The clock is stopped.",
+    "Take your time - there is no clock in this mode.",
     "Every Infineon part on the board is framed. Walk onto a frame to learn which part it is.",
     "Most of them sit on the BACK of the PCB - use the CONTROL pad to switch sides.",
     "Falling off is harmless here: you are simply put back on the board.",
   ],
-  footer: `Press ${T} to start exploring \u00b7 press ${INFO} to return to the results`,
+  footer: `Press ${T} to start exploring \u00b7 press ${INFO} for the menu`,
   tone: "win",
+};
+
+/** Menue im Erkundungsmodus, wenn vorher keine Jagd gewonnen wurde. */
+export const EXPLORE_MENU = {
+  title: "Explore mode",
+  body: ["Ready for the real thing? Start the sensor hunt - or keep looking around."],
+  footer: `Press ${T} to start the hunt \u00b7 press ${I} to keep exploring`,
+  tone: "neutral",
 };
 
 export const FAILURE = {

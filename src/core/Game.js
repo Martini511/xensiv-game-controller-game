@@ -39,7 +39,16 @@ import { DebugOverlay } from "../input/DebugOverlay.js";
 import { FadeOverlay, LoadingOverlay } from "../ui/overlays.js";
 import { InfoBox, MessageOverlay, MissionHud, Prompt, TitleScreen } from "../ui/hud.js";
 import { addScore, formatTime, loadScores } from "./leaderboard.js";
-import { BRIEFING, COMPONENT_INFO, EXPLORE, FAILURE, TITLE, VICTORY } from "./mission-texts.js";
+import {
+  BRIEFING,
+  BRIEFING_START_FOOTER,
+  COMPONENT_INFO,
+  EXPLORE,
+  EXPLORE_MENU,
+  FAILURE,
+  TITLE,
+  VICTORY,
+} from "./mission-texts.js";
 
 const MAX_DELTA = 0.1; // Sekunden - verhindert Riesenspruenge nach Tab-Wechsel
 
@@ -130,12 +139,19 @@ export class Game {
 
     /** "intro" | "briefing" | "playing" | "falling" | "failed" | "won" */
     this.state = "intro";
-    this.sensors = buildSensors().map((sensor) => ({ ...sensor, marked: false, marker: null }));
+    this.sensors = buildSensors().map((sensor) => ({
+      ...sensor,
+      label: COMPONENT_INFO[sensor.info].used.name.replace(/^XENSIV\u2122\s*/, ""),
+      marked: false,
+      marker: null,
+    }));
     /** Weitere Bauteile; `marked` heisst hier "im Erkundungsmodus entdeckt". */
     this.components = buildComponents().map((part) => ({ ...part, marked: false, marker: null }));
     /** "mission" bis zum Sieg, danach optional "explore". */
     this.mode = "mission";
     this._results = null;
+    /** Nur auf dem Start-Briefing kann man die Jagd ueberspringen. */
+    this._atStart = false;
     /** Laufzeit in Sekunden; laeuft nur waehrend des aktiven Spiels. */
     this.runTime = 0;
 
@@ -248,7 +264,10 @@ export class Game {
     } else if (this.state !== "falling") {
       // Briefing, Sieg und Absturz warten alle auf die Aktionstaste
       if (input.buttons[ACTION_BUTTON].justPressed) this._confirmMessage();
-      else if (this.state === "won" && input.buttons[EXPLORE_BUTTON].justPressed) {
+      else if (
+        input.buttons[EXPLORE_BUTTON].justPressed &&
+        (this.state === "won" || this._atStart)
+      ) {
         this._startExplore();
       }
     }
@@ -297,8 +316,9 @@ export class Game {
     // 6. Anzeigen + Rendern
     this.prompt.set(this._promptText());
     if (this.mode === "explore") {
-      const found = this.components.filter((part) => part.marked).length;
-      this.missionHud.showExplore(found, this.components.length);
+      const points = [...this.sensors, ...this.components];
+      const found = points.filter((point) => point.marked).length;
+      this.missionHud.showExplore(found, points.length);
     } else {
       this.missionHud.update(this.sensors, formatTime(this.runTime));
     }
@@ -334,7 +354,8 @@ export class Game {
     this.titleScreen?.hide();
     this.titleScreen = null;
     this.runTime = 0;
-    this.message.show({ ...BRIEFING, scores: loadScores() });
+    this._atStart = true;
+    this.message.show({ ...BRIEFING, footer: BRIEFING_START_FOOTER, scores: loadScores() });
   }
 
   /** Infobildschirm im laufenden Spiel erneut oeffnen - die Uhr pausiert dabei. */
@@ -346,6 +367,7 @@ export class Game {
   /** Aktionstaste auf Briefing / Endbildschirm. */
   _confirmMessage() {
     this.message.hide();
+    this._atStart = false;
     if (this.state === "briefing") {
       this.state = "playing";
       return;
@@ -527,6 +549,8 @@ export class Game {
    */
   _updateSensors(input, locked) {
     this._nearSensor = null;
+    // Im Erkundungsmodus wird nicht markiert - die Rahmen pflegt _updateInfo().
+    if (this.mode === "explore") return;
     const active = this.state === "playing" && !locked;
 
     for (const sensor of this.sensors) {
@@ -588,9 +612,9 @@ export class Game {
         nearest.marked = true;
         nearest.marker.marked = true;
       }
-      for (const part of this.components) {
-        part.marker.inRange = part === nearest;
-        part.marker.update(this._clock.elapsedTime);
+      for (const point of points) {
+        point.marker.inRange = point === nearest;
+        point.marker.update(this._clock.elapsedTime);
       }
     }
 
@@ -620,8 +644,9 @@ export class Game {
     this.message.show(this._results);
   }
 
-  /** Nach dem Sieg: frei herumlaufen und alle Infineon-Bauteile entdecken. */
+  /** Frei herumlaufen und alle Infineon-Bauteile entdecken - nach dem Sieg oder direkt. */
   _startExplore() {
+    this._atStart = false;
     if (this.mode === "explore") {
       this.message.hide();
       this.state = "playing";
@@ -629,17 +654,23 @@ export class Game {
     }
 
     this.mode = "explore";
-    // Immer voll sichtbar - hier wird entdeckt, nicht gesucht.
-    for (const part of this.components) part.marker.proximity = 1;
+    for (const point of [...this.sensors, ...this.components]) {
+      // Immer voll sichtbar - hier wird entdeckt, nicht gesucht.
+      point.marker.proximity = 1;
+      point.marker.highlighted = false;
+    }
     this._updateMarkerVisibility();
     this.state = "briefing";
     this.message.show(EXPLORE);
   }
 
-  /** Aus dem Erkundungsmodus zurueck zum Ergebnis - von dort geht's weiter. */
+  /**
+   * Menue im Erkundungsmodus: nach einem Sieg das Ergebnis, sonst eine kurze
+   * Auswahl. Beide nutzen die Endbildschirm-Logik: T = neue Jagd, I = weiter.
+   */
   _showResults() {
     this.state = "won";
-    this.message.show(this._results);
+    this.message.show(this._results ?? EXPLORE_MENU);
   }
 
   /** Absturz im Erkundungsmodus: zurueck auf die Kontrollflaeche dieser Seite. */
@@ -664,6 +695,7 @@ export class Game {
       point.marker.reset();
     }
     this.mode = "mission";
+    this._results = null;
     this.missionHud.update(this.sensors);
 
     this.character.position.copy(buildSpawn("top"));

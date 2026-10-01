@@ -98,7 +98,7 @@ export class MissionHud {
   }
 
   /**
-   * @param {{id: string, button: string, marked: boolean}[]} sensors
+   * @param {{label: string, button: string, marked: boolean}[]} sensors
    * @param {string} [time] formatierte Laufzeit; ohne Angabe bleibt die letzte stehen
    */
   update(sensors, time = this._time) {
@@ -106,10 +106,10 @@ export class MissionHud {
     const found = sensors.filter((sensor) => sensor.marked).length;
     this._render(
       `<div class="mission-time">\u23f1 ${escapeHtml(time)}</div>` +
-        `<div class="mission-title">SENSORS ${found} / ${sensors.length}</div>` +
+        `<div class="mission-title">XENSIV\u2122 SENSORS ${found} / ${sensors.length}</div>` +
         sensors
           .map((sensor) => {
-            const text = sensor.marked ? `${sensor.id} (${sensor.button})` : "???";
+            const text = sensor.marked ? `${sensor.label} (${sensor.button})` : "???";
             return `<div class="sensor-row ${sensor.marked ? "is-found" : ""}">${
               sensor.marked ? "\u25a0" : "\u25a1"
             } ${escapeHtml(text)}</div>`;
