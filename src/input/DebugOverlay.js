@@ -29,6 +29,7 @@ export class DebugOverlay {
       lines.push(`<span class="status-disconnected">● Kein Controller verbunden</span>`);
       lines.push(`  Taste am Controller druecken,`);
       lines.push(`  damit der Browser ihn erkennt.`);
+      lines.push(`  Notfall: Tastatur + Maus aktiv.`);
     }
 
     lines.push("");

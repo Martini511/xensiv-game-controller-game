@@ -1,4 +1,5 @@
 import { BUTTON_LABELS } from "../input/GamepadManager.js";
+import { KEY_LABELS } from "../input/KeyboardMouseInput.js";
 import { ACTION_BUTTON, EXPLORE_BUTTON, INFO_BUTTON, JUMP_BUTTON } from "./level-config.js";
 
 /** Alle Spieltexte an einer Stelle - bewusst auf Englisch. */
@@ -13,17 +14,24 @@ export const TITLE = {
   subtitle: "XENSIV\u2122 Game Controller",
 };
 
-/** Steuerung zeilenweise - wird als Tabelle im Banner gerendert. */
+/**
+ * Steuerung zeilenweise - wird als Tabelle im Banner gerendert.
+ * `keyboard` ist die Notfall-Belegung fuer Tastatur und Maus.
+ */
 export const CONTROLS = [
-  { key: "Left stick", action: "Move" },
-  { key: "Right stick", action: "Rotate camera" },
-  { key: F, action: "Jump" },
-  { key: T, action: "Use the CONTROL pad / confirm" },
-  { key: "L1 \u00b7 R1", action: "Mark a shoulder sensor" },
-  { key: "L2 \u00b7 R2", action: "Mark a trigger sensor" },
-  { key: "L3 \u00b7 R3", action: "Mark a stick sensor (click the stick)" },
-  { key: INFO, action: "Open this info screen again" },
-  { key: "D-Pad \u2190 + \u2192", action: "Back to the intro" },
+  { key: "Left stick", keyboard: "W A S D", action: "Move" },
+  { key: "Right stick", keyboard: "Mouse", action: "Rotate camera (click to capture, Esc to release)" },
+  { key: F, keyboard: `${KEY_LABELS[JUMP_BUTTON]} \u00b7 Space`, action: "Jump" },
+  { key: T, keyboard: `${KEY_LABELS[ACTION_BUTTON]} \u00b7 Enter`, action: "Use the CONTROL pad / confirm" },
+  { key: "L1 \u00b7 R1", keyboard: `${KEY_LABELS.L1} \u00b7 ${KEY_LABELS.R1}`, action: "Mark a shoulder sensor" },
+  { key: "L2 \u00b7 R2", keyboard: `${KEY_LABELS.L2} \u00b7 ${KEY_LABELS.R2}`, action: "Mark a trigger sensor" },
+  { key: "L3 \u00b7 R3", keyboard: `${KEY_LABELS.L3} \u00b7 ${KEY_LABELS.R3}`, action: "Mark a stick sensor (click the stick)" },
+  { key: INFO, keyboard: KEY_LABELS[INFO_BUTTON], action: "Open this info screen again" },
+  {
+    key: "D-Pad \u2190 + \u2192",
+    keyboard: `${KEY_LABELS.DPAD_LEFT} + ${KEY_LABELS.DPAD_RIGHT}`,
+    action: "Back to the intro",
+  },
 ];
 
 export const BRIEFING = {

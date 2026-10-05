@@ -35,9 +35,17 @@ import { ChipModel } from "../entities/ChipModel.js";
 import { PortalMarker } from "../entities/PortalMarker.js";
 import { SensorMarker } from "../entities/SensorMarker.js";
 import { BUTTON_LABELS, GamepadManager } from "../input/GamepadManager.js";
+import { KEY_LABELS, KeyboardMouseInput } from "../input/KeyboardMouseInput.js";
 import { DebugOverlay } from "../input/DebugOverlay.js";
 import { FadeOverlay, LoadingOverlay } from "../ui/overlays.js";
-import { InfoBox, MessageOverlay, MissionHud, Prompt, TitleScreen } from "../ui/hud.js";
+import {
+  InfoBox,
+  KeyboardHint,
+  MessageOverlay,
+  MissionHud,
+  Prompt,
+  TitleScreen,
+} from "../ui/hud.js";
 import { addScore, formatTime, loadScores } from "./leaderboard.js";
 import {
   BRIEFING,
@@ -128,7 +136,11 @@ export class Game {
           : distance,
     });
 
-    this.gamepad = new GamepadManager({ deadzone: 0.18 });
+    // Notfall-Steuerung: Tastatur + Maus laufen immer parallel zum Controller.
+    this.gamepad = new GamepadManager({
+      deadzone: 0.18,
+      keyboard: new KeyboardMouseInput(this.renderer.domElement),
+    });
     this.debugOverlay = new DebugOverlay(document.body);
     this.loadingOverlay = new LoadingOverlay(document.body);
     this.fadeOverlay = new FadeOverlay(document.body, PORTAL.fadeDurationMs);
@@ -136,6 +148,7 @@ export class Game {
     this.prompt = new Prompt(document.body);
     this.infoBox = new InfoBox(document.body);
     this.message = new MessageOverlay(document.body);
+    this.keyboardHint = new KeyboardHint(document.body);
     this.titleScreen = null;
 
     /** "intro" | "briefing" | "playing" | "falling" | "failed" | "won" */
@@ -242,6 +255,7 @@ export class Game {
     this.stop();
     this.debugOverlay.dispose();
     this.fadeOverlay.dispose();
+    this.keyboardHint.dispose();
     this._disposeRenderer();
   }
 
@@ -308,9 +322,10 @@ export class Game {
       this.runTime += deltaTime;
     }
 
-    // 2. Kamera-Rotation aus dem rechten Stick
+    // 2. Kamera-Rotation aus dem rechten Stick bzw. der Maus
     if (!locked) {
       this.cameraRig.rotate(input.rightStick.x, input.rightStick.y, deltaTime);
+      this.cameraRig.rotateBy(input.look.x, input.look.y);
     }
 
     // 3. Bewegung aus dem linken Stick - relativ zur Kamera-Ausrichtung.
@@ -341,6 +356,10 @@ export class Game {
 
     // 6. Anzeigen + Rendern
     this.prompt.set(this._promptText());
+    this.keyboardHint.update(
+      input.lastDevice === "keyboard",
+      this.gamepad.keyboard.state.pointerLocked
+    );
     if (this.mode === "explore") {
       const points = [...this.sensors, ...this.components];
       const found = points.filter((point) => point.marked).length;
@@ -352,6 +371,7 @@ export class Game {
       fps: this._fps.toFixed(0),
       seite: this.currentSide,
       pos: formatPosition(this.character.position),
+      eingabe: input.lastDevice === "keyboard" ? "Tastatur/Maus" : "Controller",
     });
     this.renderer.render(this.scene, this.camera);
   }
@@ -362,16 +382,24 @@ export class Game {
 
   /** Text der Kontextanzeige am unteren Bildrand. */
   _promptText() {
-    if (this.state === "intro") return `Press ${BUTTON_LABELS[JUMP_BUTTON]} to skip the intro`;
+    if (this.state === "intro") return `Press ${this._label(JUMP_BUTTON)} to skip the intro`;
     if (this.state === "briefing" || this.state === "falling" || this.isGameOver) return null;
     if (this._isTransitioning) return null;
     if (this._nearSensor) {
-      return `Sensor ${this._nearSensor.id} - press ${BUTTON_LABELS[this._nearSensor.button]} to mark it`;
+      return `Sensor ${this._nearSensor.id} - press ${this._label(this._nearSensor.button)} to mark it`;
     }
     if (this._inPortalZone) {
-      return `Press ${BUTTON_LABELS[ACTION_BUTTON]} to use the control pad`;
+      return `Press ${this._label(ACTION_BUTTON)} to use the control pad`;
     }
     return null;
+  }
+
+  /** Tastenname fuer Prompts - an der Tastatur mit der passenden Taste dazu. */
+  _label(button) {
+    const pad = BUTTON_LABELS[button];
+    const key = KEY_LABELS[button];
+    if (this.gamepad.state.lastDevice !== "keyboard" || !key || key === pad) return pad;
+    return `${key} (${pad})`;
   }
 
   /** Kamerafahrt vorbei: Titel ausblenden, Briefing zeigen. */

@@ -90,8 +90,13 @@ const TRIGGER_THRESHOLD = 0.5;
 const BUTTON_NAMES = Object.keys(BUTTON_INDEX);
 
 export class GamepadManager {
+  /**
+   * @param {{deadzone?: number, keyboard?: import("./KeyboardMouseInput.js").KeyboardMouseInput}} options
+   *   `keyboard`: optionale Notfall-Steuerung, wird mit dem Controller zusammengefuehrt.
+   */
   constructor(options = {}) {
     this.deadzone = options.deadzone ?? 0.18;
+    this.keyboard = options.keyboard ?? null;
     /** Index des aktuell genutzten Gamepads, null = keins. */
     this.activeIndex = null;
 
@@ -103,8 +108,12 @@ export class GamepadManager {
       leftStick: { x: 0, y: 0 },
       /** Rechter Stick: Kamera. */
       rightStick: { x: 0, y: 0 },
+      /** Kamera-Drehung per Maus in diesem Frame (Radiant), unabhaengig von deltaTime. */
+      look: { x: 0, y: 0 },
       /** Alle Tasten nach Namen, jeweils mit pressed / justPressed / value. */
       buttons: Object.fromEntries(BUTTON_NAMES.map((name) => [name, createButtonState()])),
+      /** "gamepad" | "keyboard" - womit zuletzt gespielt wurde (fuer Tastenhinweise). */
+      lastDevice: "gamepad",
       /** Rohwerte fuer die Debug-Anzeige. */
       raw: { axes: [], buttons: [] },
     };
@@ -120,53 +129,74 @@ export class GamepadManager {
     // Falls beim Laden bereits ein Controller aktiv war (z.B. nach Reload),
     // wird kein Event mehr gefeuert -> einmalig selbst nachsehen.
     this._pickFirstAvailableGamepad();
+    this.keyboard?.start();
   }
 
   stop() {
     window.removeEventListener("gamepadconnected", this._onConnected);
     window.removeEventListener("gamepaddisconnected", this._onDisconnected);
+    this.keyboard?.stop();
   }
 
-  /** Muss einmal pro Frame aufgerufen werden (Polling). */
+  /**
+   * Muss einmal pro Frame aufgerufen werden (Polling). Ist eine Notfall-
+   * Steuerung angeschlossen, wird sie hier eingemischt: Sticks werden addiert,
+   * Tasten verodert - Controller und Tastatur funktionieren gleichzeitig.
+   */
   update() {
     const gamepad = this._getActiveGamepad();
+    const keys = this.keyboard ? this.keyboard.update() : null;
+    const s = this.state;
 
-    if (!gamepad) {
-      this._resetState();
-      return this.state;
+    if (gamepad) {
+      s.connected = true;
+      s.id = gamepad.id;
+      s.mapping = gamepad.mapping || "unbekannt";
+      s.raw.axes = Array.from(gamepad.axes);
+      s.raw.buttons = gamepad.buttons.map((button) => ({
+        pressed: button.pressed,
+        value: button.value,
+      }));
+
+      applyRadialDeadzone(
+        s.leftStick,
+        gamepad.axes[AXIS_LEFT_X] ?? 0,
+        gamepad.axes[AXIS_LEFT_Y] ?? 0,
+        this.deadzone
+      );
+      applyRadialDeadzone(
+        s.rightStick,
+        gamepad.axes[AXIS_RIGHT_X] ?? 0,
+        gamepad.axes[AXIS_RIGHT_Y] ?? 0,
+        this.deadzone
+      );
+    } else {
+      this._resetConnection();
     }
 
-    this.state.connected = true;
-    this.state.id = gamepad.id;
-    this.state.mapping = gamepad.mapping || "unbekannt";
-    this.state.raw.axes = Array.from(gamepad.axes);
-    this.state.raw.buttons = gamepad.buttons.map((button) => ({
-      pressed: button.pressed,
-      value: button.value,
-    }));
-
-    applyRadialDeadzone(
-      this.state.leftStick,
-      gamepad.axes[AXIS_LEFT_X] ?? 0,
-      gamepad.axes[AXIS_LEFT_Y] ?? 0,
-      this.deadzone
-    );
-    applyRadialDeadzone(
-      this.state.rightStick,
-      gamepad.axes[AXIS_RIGHT_X] ?? 0,
-      gamepad.axes[AXIS_RIGHT_Y] ?? 0,
-      this.deadzone
+    let gamepadUsed = Boolean(
+      s.leftStick.x || s.leftStick.y || s.rightStick.x || s.rightStick.y
     );
 
     for (const name of BUTTON_NAMES) {
-      updateButtonState(
-        this.state.buttons[name],
-        gamepad.buttons[BUTTON_INDEX[name]],
-        ANALOG_BUTTONS.has(name) ? TRIGGER_THRESHOLD : 0
+      const padPressed = updateButtonState(
+        s.buttons[name],
+        gamepad?.buttons[BUTTON_INDEX[name]],
+        ANALOG_BUTTONS.has(name) ? TRIGGER_THRESHOLD : 0,
+        Boolean(keys?.buttons[name])
       );
+      if (padPressed) gamepadUsed = true;
     }
 
-    return this.state;
+    if (keys) {
+      addClamped(s.leftStick, keys.move);
+      s.look.x = keys.look.x;
+      s.look.y = keys.look.y;
+      if (keys.active) s.lastDevice = "keyboard";
+      else if (gamepadUsed) s.lastDevice = "gamepad";
+    }
+
+    return s;
   }
 
   _onConnected(event) {
@@ -219,6 +249,12 @@ export class GamepadManager {
   }
 
   _resetState() {
+    this._resetConnection();
+    for (const name of BUTTON_NAMES) updateButtonState(this.state.buttons[name], null, 0);
+  }
+
+  /** Controller-Werte nullen; die Button-Flanken berechnet update() selbst. */
+  _resetConnection() {
     const s = this.state;
     s.connected = false;
     s.id = null;
@@ -227,9 +263,9 @@ export class GamepadManager {
     s.leftStick.y = 0;
     s.rightStick.x = 0;
     s.rightStick.y = 0;
-    for (const name of BUTTON_NAMES) updateButtonState(s.buttons[name], null, 0);
     s.raw.axes = [];
-    s.raw.buttons = [];  }
+    s.raw.buttons = [];
+  }
 }
 
 const createButtonState = () => ({
@@ -243,16 +279,31 @@ const createButtonState = () => ({
 
 /**
  * Digitale Buttons melden `pressed` selbst, Trigger liefern zusaetzlich einen
- * Analogwert - deshalb wird beides ausgewertet.
+ * Analogwert - deshalb wird beides ausgewertet. `keyPressed` kommt von der
+ * Tastatur und zaehlt wie ein voll durchgedrueckter Button.
+ * Gibt zurueck, ob der Controller selbst die Taste haelt.
  */
-function updateButtonState(target, button, threshold) {
-  const value = button?.value ?? 0;
-  const pressed = Boolean(button?.pressed) || value > threshold;
+function updateButtonState(target, button, threshold, keyPressed = false) {
+  const padValue = button?.value ?? 0;
+  const padPressed = Boolean(button?.pressed) || padValue > threshold;
+  const pressed = padPressed || keyPressed;
 
   target.justPressed = pressed && !target.pressed;
   target.pressed = pressed;
-  target.value = value;
-  return target;
+  target.value = keyPressed ? 1 : padValue;
+  return padPressed;
+}
+
+/** Addiert einen Richtungsvektor und begrenzt den Betrag auf 1. */
+function addClamped(out, add) {
+  out.x += add.x;
+  out.y += add.y;
+  const magnitude = Math.hypot(out.x, out.y);
+  if (magnitude > 1) {
+    out.x /= magnitude;
+    out.y /= magnitude;
+  }
+  return out;
 }
 
 /**

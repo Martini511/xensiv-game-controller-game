@@ -85,6 +85,29 @@ unter **Settings → Pages → Source** auf *GitHub Actions* stellen.
 Die Bewegung ist kamerarelativ: Stick nach oben bewegt den Charakter immer
 von der Kamera weg.
 
+### Notfall-Steuerung: Tastatur + Maus
+
+Faellt der Controller aus, laesst sich das Spiel jederzeit mit Tastatur und
+Maus weiterspielen – ohne Umschalten, beide Eingaben laufen parallel
+([src/input/KeyboardMouseInput.js](src/input/KeyboardMouseInput.js)). Die
+Aktionstasten tragen dieselben Buchstaben wie der Controller, daher stimmen
+alle Spieltexte ("Press T ...") auch an der Tastatur.
+
+| Taste / Maus           | Entspricht      | Aktion                                  |
+| ---------------------- | --------------- | --------------------------------------- |
+| W A S D                | Linker Stick    | Charakter bewegen                       |
+| Maus                   | Rechter Stick   | Kamera drehen (Klick fängt die Maus ein, Esc gibt sie frei; alternativ mit gedrueckter linker Maustaste ziehen) |
+| F / Leertaste          | F (A)           | Springen / Intro ueberspringen          |
+| T / Enter              | T (Y)           | Kontrollflaeche / bestaetigen           |
+| I                      | I (X)           | Erkundungsmodus                         |
+| 1 2 3 4 5 6            | L1 R1 L2 R2 L3 R3 | Sensor markieren                      |
+| Pfeiltasten            | D-Pad           | Infobildschirm, Reiter, ← + → zum Intro |
+
+Sobald mit Tastatur oder Maus gespielt wird, erscheint unten rechts eine
+Kurzuebersicht, und die Prompts nennen zusaetzlich die Taste (z.B.
+"press 1 (L1)"). Der Reiter "Controls" im Infobildschirm zeigt beide
+Belegungen nebeneinander.
+
 > **Hinweis zur Gamepad API:** Browser geben einen Controller aus
 > Datenschutzgruenden erst frei, nachdem einmal eine Taste am Controller
 > gedrueckt wurde. Bis dahin zeigt das Debug-Overlay
@@ -122,6 +145,7 @@ src/
     SensorMarker.js          Rahmen auf den Sensoren
   input/
     GamepadManager.js        Gamepad-API-Polling, Deadzone, Button-States
+    KeyboardMouseInput.js    Notfall-Steuerung per Tastatur + Maus
     DebugOverlay.js          HTML-Overlay fuer Live-Werte
   ui/
     overlays.js              Ladeanzeige und Fade-to-Black

@@ -47,12 +47,13 @@ export class ThirdPersonCamera {
    * @param {number} y Rechter Stick vertikal (-1..1)
    */
   rotate(x, y, deltaTime) {
-    this.yaw -= x * this.rotationSpeed * deltaTime;
-    this.pitch = THREE.MathUtils.clamp(
-      this.pitch + y * this.rotationSpeed * deltaTime,
-      MIN_PITCH,
-      MAX_PITCH
-    );
+    this.rotateBy(x * this.rotationSpeed * deltaTime, y * this.rotationSpeed * deltaTime);
+  }
+
+  /** Dreht um feste Winkel in Radiant - z.B. aus der Mausbewegung. */
+  rotateBy(yawDelta, pitchDelta) {
+    this.yaw -= yawDelta;
+    this.pitch = THREE.MathUtils.clamp(this.pitch + pitchDelta, MIN_PITCH, MAX_PITCH);
   }
 
   /** Setzt die Kamera ohne Interpolation ans Ziel - z.B. nach einem Teleport. */

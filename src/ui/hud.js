@@ -1,5 +1,6 @@
 import logoUrl from "../assets/lowres-Logo_Infineon_RGB.eps.png";
 import { formatDate, formatTime } from "../core/leaderboard.js";
+import { KEY_LABELS } from "../input/KeyboardMouseInput.js";
 
 /**
  * Spiel-UI: Titelbildschirm, Start-Banner, Missions-Anzeige, Kontext-Prompt
@@ -265,6 +266,42 @@ export class Prompt {
   }
 }
 
+/**
+ * Kurzuebersicht der Notfall-Steuerung - erscheint, sobald mit Tastatur oder
+ * Maus gespielt wird, und verschwindet wieder, wenn der Controller uebernimmt.
+ */
+export class KeyboardHint {
+  constructor(parent = document.body) {
+    this.element = document.createElement("div");
+    this.element.id = "keyboard-hint";
+    this.element.hidden = true;
+
+    const title = document.createElement("div");
+    title.className = "keyboard-hint-title";
+    title.textContent = "Keyboard & mouse";
+
+    const keys = document.createElement("div");
+    keys.textContent = `WASD move \u00b7 Mouse look \u00b7 ${KEY_LABELS.A}/Space jump \u00b7 ${KEY_LABELS.Y}/Enter use \u00b7 ${KEY_LABELS.L1}\u2013${KEY_LABELS.R3} sensors \u00b7 ${KEY_LABELS.DPAD_DOWN} info`;
+
+    this._lockHint = document.createElement("div");
+    this._lockHint.className = "keyboard-hint-lock";
+    this._lockHint.textContent = "Click into the game to capture the mouse";
+
+    this.element.append(title, keys, this._lockHint);
+    parent.appendChild(this.element);
+  }
+
+  update(visible, pointerLocked) {
+    if (this.element.hidden === !visible && this._lockHint.hidden === pointerLocked) return;
+    this.element.hidden = !visible;
+    this._lockHint.hidden = pointerLocked;
+  }
+
+  dispose() {
+    this.element.remove();
+  }
+}
+
 function heading(text) {
   const node = document.createElement("h1");
   node.textContent = text;
@@ -299,21 +336,35 @@ function tabSection({ label, key }, children) {
   return section;
 }
 
-/** Eine Zeile je Taste - gerendert als zweispaltiges Grid. */
+/**
+ * Eine Zeile je Taste - gerendert als Grid. Hat eine Zeile eine
+ * Tastatur-Belegung, kommt eine eigene Spalte samt Kopfzeile dazu.
+ */
 function controlTable(controls) {
   const table = document.createElement("div");
   table.className = "control-table";
+  const withKeyboard = controls.some((row) => row.keyboard);
 
-  for (const { key, action } of controls) {
-    const keyNode = document.createElement("span");
-    keyNode.className = "control-key";
-    keyNode.textContent = key;
+  const cell = (className, text) => {
+    const node = document.createElement("span");
+    node.className = className;
+    node.textContent = text;
+    return node;
+  };
 
-    const actionNode = document.createElement("span");
-    actionNode.className = "control-action";
-    actionNode.textContent = action;
+  if (withKeyboard) {
+    table.classList.add("has-keyboard");
+    table.append(
+      cell("control-head", "Controller"),
+      cell("control-head", "Keyboard"),
+      cell("control-head", "")
+    );
+  }
 
-    table.append(keyNode, actionNode);
+  for (const { key, keyboard, action } of controls) {
+    table.append(cell("control-key", key));
+    if (withKeyboard) table.append(cell("control-key is-keyboard", keyboard ?? ""));
+    table.append(cell("control-action", action));
   }
 
   return table;
