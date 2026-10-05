@@ -184,6 +184,52 @@ export const EXPLORE_BUTTON = "X";
 /** Wie nah man rankommen muss, um markieren zu koennen (mm). */
 export const SENSOR_RADIUS_MM = 7;
 
+/**
+ * Die beiden Taster auf der Unterseite (Siebdruck "Prog" und "RESET").
+ * Springt oder steht der Chip auf der weissen Kappe, wird sie eingedrueckt.
+ * Koordinaten = Mitte des Tasters in CAD-XY (mm).
+ */
+export const PUSH_BUTTONS = [
+  { id: "S1", label: "Prog", side: "bottom", x: 25.5, y: 14.8 },
+  { id: "S2", label: "RESET", side: "bottom", x: 25.55, y: 21.1 },
+];
+
+/**
+ * Hub der Tasterkappe (mm). Echte Taster haben ~0.25 mm - etwas mehr, damit
+ * man es im Spiel sieht. Die Kappe steht 0.7 mm ueber dem Gehaeuse.
+ */
+export const PUSH_BUTTON_TRAVEL_MM = 0.6;
+
+/**
+ * Erkennung der Kappe im Modell: sie beginnt mindestens `gap` mm ueber der
+ * Platine und ragt bis ueber `top` mm hinaus. Das Gehaeuse sitzt direkt auf
+ * der Platine, seine duennen Deckbleche enden bei 1.55 mm.
+ */
+export const PUSH_BUTTON_CAP_MM = { gap: 1.2, top: 2.2 };
+
+/**
+ * Bauteile mit begehbarem Innenraum. Statt einer einzigen Hindernis-Box ueber
+ * den ganzen Grundriss bekommen sie eine feine Kollision aus der echten
+ * Geometrie - Waende, Boden, Kontakte und Dach einzeln. So kann der Chip in
+ * den Steckverbinder J3 hineinlaufen (Oeffnung 4.75 mm breit, Boden bei
+ * 0.85 mm, Kontakte ab 3.2 mm).
+ *
+ * Rechteck in CAD-XY (mm): alle Meshes, die komplett darin liegen, gehoeren
+ * zum Bauteil.
+ */
+export const ENTERABLE_PARTS = [
+  { id: "J3", side: "bottom", minX: 55.5, maxX: 65, minY: -7, maxY: 1.5 },
+];
+
+/** Rasterweite (mm), mit der die Geometrie begehbarer Bauteile abgetastet wird. */
+export const ENTERABLE_CELL_MM = 0.25;
+
+/**
+ * Mindesthoehe ueber der Platine (mm), ab der ein Mesh zum begehbaren Bauteil
+ * gehoert. Die Loetpads darunter (0.04 mm) bleiben normale Platinenteile.
+ */
+export const ENTERABLE_MIN_HEIGHT_MM = 0.3;
+
 /** Kantenlaenge des Markierungsrahmens (mm) - etwa so gross wie das Kaestchen. */
 export const SENSOR_MARKER_MM = 3.5;
 

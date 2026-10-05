@@ -30,6 +30,15 @@ derselben Platinenseite steht) – so laesst er sich gezielt aufspueren.
 Wer ueber die Platinenkante laeuft, faellt herunter und die Runde ist vorbei
 (T startet neu).
 
+Auf der Unterseite sitzen die beiden Taster **S1 ("Prog")** und
+**S2 ("RESET")**. Springt oder laeuft man auf ihre weisse Kappe, federt sie
+ein – der Chip sinkt mit – und springt beim Absprung wieder heraus.
+
+Der weisse Steckverbinder **J3** auf der Unterseite ist begehbar: Der Chip
+passt durch die Oeffnung, laeuft auf dem Boden des Steckverbinders unter den
+Kontakten hindurch und stoesst sich beim Springen den Kopf am Dach. Solange
+er drin steht, wird J3 durchscheinend und die Kamera bleibt auf Abstand.
+
 ## Setup
 
 Voraussetzung: Node.js 18+ und npm.
@@ -171,6 +180,9 @@ Einheiten, die die Konsolen-Analyse beim Start ausgibt:
 | `SPAWN_MM`             | Startposition des Charakters (aktuell das OLED-Display)  |
 | `SENSORS`              | Position der vier Magnetsensoren (CAD-XY)               |
 | `SENSOR_RADIUS_MM`     | Wie nah man ran muss, um markieren zu koennen           |
+| `PUSH_BUTTONS`         | Lage der Taster S1/S2 (CAD-XY), deren Kappe einfedert   |
+| `PUSH_BUTTON_TRAVEL_MM`| Wie tief eine Tasterkappe eingedrueckt wird             |
+| `ENTERABLE_PARTS`      | Bauteile mit begehbarem Innenraum (aktuell J3) – feine Kollision aus der Geometrie statt einer Box |
 | `MAX_GROUND_HEIGHT_MM` | Bis zu welcher Hoehe etwas als Untergrund zaehlt        |
 | `FALL_DEATH_Y`         | Tiefe, ab der der Sturz als verloren gilt               |
 

@@ -1,11 +1,18 @@
 import * as THREE from "three";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import {
+  BOARD,
   BOARD_MID_Y,
   CHARACTER_HEIGHT,
+  ENTERABLE_CELL_MM,
+  ENTERABLE_MIN_HEIGHT_MM,
+  ENTERABLE_PARTS,
   MAX_GROUND_HEIGHT_MM,
   MODEL_ROTATION_X,
   OBSTACLE_HEIGHT_MM,
+  PUSH_BUTTONS,
+  PUSH_BUTTON_CAP_MM,
+  PUSH_BUTTON_TRAVEL_MM,
   SCALE_FACTOR,
   SIDE_FLIP_Z,
   WORLD_PER_MM,
@@ -16,7 +23,7 @@ import {
 const KEPT_ATTRIBUTES = ["position", "normal", "uv"];
 
 /** Kantenlaenge einer Zelle des Hoehenrasters (0.5 mm in Weltunits). */
-const HEIGHT_CELL_SIZE = WORLD_PER_MM * 0.5;
+export const HEIGHT_CELL_SIZE = WORLD_PER_MM * 0.5;
 
 /**
  * So viele uebereinanderliegende Flaechen merkt sich eine Rasterzelle. Ohne
@@ -70,12 +77,33 @@ export class Board {
     const worldBox = new THREE.Box3();
     const sideBox = new THREE.Box3();
     let sourceMeshes = 0;
+    /** Kappen der Taster - beweglich, deshalb weder gebatcht noch im Hoehenraster. */
+    const capParts = new Map();
+    /** Meshes begehbarer Bauteile - bekommen statt der Box eine feine Kollision. */
+    const enterableParts = new Map();
 
     source.traverse((object) => {
       if (!object.isMesh || !object.geometry) return;
       sourceMeshes++;
 
       worldBox.setFromObject(object);
+
+      const button = matchPushButtonCap(worldBox);
+      if (button) {
+        if (!capParts.has(button)) capParts.set(button, []);
+        capParts.get(button).push({ object, box: worldBox.clone() });
+        return;
+      }
+
+      const enterable = matchEnterablePart(worldBox);
+      if (enterable) {
+        // Eigene Meshes statt Batch: das Bauteil wird transparent, wenn der
+        // Chip drin steht, und hat keine grobe Hindernis-Box.
+        if (!enterableParts.has(enterable)) enterableParts.set(enterable, []);
+        enterableParts.get(enterable).push(object);
+        return;
+      }
+
       const side =
         worldBox.min.y >= BOARD_MID_Y
           ? "top"
@@ -159,6 +187,46 @@ export class Board {
     };
     this.object3D.add(this.groups.top, this.groups.bottom, this.groups.shared);
 
+    /** Eigene Gruppen je Seite: das Hoehenraster liest nur die Batches oben. */
+    this.buttonGroups = { top: new THREE.Group(), bottom: new THREE.Group() };
+    this.buttonGroups.top.name = "Taster Oberseite";
+    this.buttonGroups.bottom.name = "Taster Unterseite";
+    this.object3D.add(this.buttonGroups.top, this.buttonGroups.bottom);
+    this.pushButtons = buildPushButtons(capParts, this.buttonGroups, flip);
+
+    /**
+     * Feine Kollision der begehbaren Bauteile: Quader mit Unter- und
+     * Oberkante. Ein Quader ist nur dann Wand, wenn er die Figur auf ihrer
+     * aktuellen Hoehe trifft - darunter hindurch und darauf geht.
+     */
+    this.solids = buildSolids(enterableParts, flip, collision);
+    for (const side of ["top", "bottom"]) {
+      computeHeadroom(this.solids[side]);
+      for (const box of this.solids[side]) {
+        if (box.top > collision[side].walkY + obstacleHeight) {
+          collision[side].blockers.push({ ...box, minY: box.bottom, maxY: box.top });
+        }
+      }
+    }
+
+    /** Begehbare Bauteile als eigene Meshes - gehen ins Hoehenraster mit ein. */
+    this.enterableGroups = { top: new THREE.Group(), bottom: new THREE.Group() };
+    this.enterableGroups.top.name = "Begehbar Oberseite";
+    this.enterableGroups.bottom.name = "Begehbar Unterseite";
+    this.object3D.add(this.enterableGroups.top, this.enterableGroups.bottom);
+    /** id -> eigene Materialien, damit nur dieses Bauteil ausgeblendet wird. */
+    this.enterableMaterials = new Map();
+    for (const [part, meshes] of enterableParts) {
+      const materials = new Map();
+      for (const mesh of meshes) {
+        const own = Array.isArray(mesh.material)
+          ? mesh.material.map((m) => cloneOnce(materials, m))
+          : cloneOnce(materials, mesh.material);
+        this.enterableGroups[part.side].add(createBatch(bakeGeometry(mesh, false), own));
+      }
+      this.enterableMaterials.set(part.id, [...materials.values()]);
+    }
+
     disposeSource(source);
 
     this.boundingBox = new THREE.Box3().setFromObject(this.object3D);
@@ -174,13 +242,13 @@ export class Board {
     };
     this.heightFields = {
       top: buildHeightField(
-        [this.groups.top, this.groups.shared],
+        [this.groups.top, this.groups.shared, this.enterableGroups.top],
         new THREE.Matrix4(),
         this.boundingBox,
         collision.top.walkY
       ),
       bottom: buildHeightField(
-        [this.groups.bottom, this.groups.shared],
+        [this.groups.bottom, this.groups.shared, this.enterableGroups.bottom],
         flip,
         this.boundingBox,
         collision.bottom.walkY
@@ -225,7 +293,38 @@ export class Board {
       if (Number.isNaN(height) || value > height) height = value;
     }
 
+    // Tasterkappen stehen nicht im Raster - ihre Hoehe haengt vom Druck ab.
+    const button = this.pushButtonAt(side, x, z);
+    if (button) {
+      const value = button.top - button.depth;
+      if (value <= maxY && (Number.isNaN(height) || value > height)) height = value;
+    }
+
     return height;
+  }
+
+  /** Tasterkappe, die an dieser Stelle liegt - oder null. */
+  pushButtonAt(side, x, z) {
+    for (const button of this.pushButtons) {
+      if (
+        button.side === side &&
+        x >= button.minX &&
+        x <= button.maxX &&
+        z >= button.minZ &&
+        z <= button.maxZ
+      ) {
+        return button;
+      }
+    }
+    return null;
+  }
+
+  /** Drueckt eine Tasterkappe um `depth` Weltunits ein (0 = Ruhelage). */
+  setPushButtonDepth(button, depth) {
+    button.depth = depth;
+    // Im ungekippten Modell zeigt die Unterseite nach -Y: Eindruecken heisst
+    // dort +Y, also Richtung Platine.
+    button.object3D.position.y = button.side === "bottom" ? depth : -depth;
   }
 
   /**
@@ -251,8 +350,329 @@ export class Board {
   setVisibleSide(side) {
     this.groups.top.visible = side === "top";
     this.groups.bottom.visible = side === "bottom";
+    this.buttonGroups.top.visible = side === "top";
+    this.buttonGroups.bottom.visible = side === "bottom";
+    this.enterableGroups.top.visible = side === "top";
+    this.enterableGroups.bottom.visible = side === "bottom";
     this.object3D.rotation.z = SIDE_FLIP_Z[side];
   }
+
+  /** Deckkraft eines begehbaren Bauteils (1 = normal). */
+  setPartOpacity(id, opacity) {
+    for (const material of this.enterableMaterials.get(id) ?? []) {
+      const transparent = opacity < 0.999;
+      if (material.transparent !== transparent) {
+        material.transparent = transparent;
+        // Durchscheinend darf es nichts dahinter aus dem Tiefenpuffer verdraengen.
+        material.depthWrite = !transparent;
+        material.needsUpdate = true;
+      }
+      material.opacity = opacity;
+    }
+  }
+}
+
+/** Klont ein Material nur einmal je Bauteil. */
+function cloneOnce(cache, material) {
+  if (!cache.has(material)) cache.set(material, material.clone());
+  return cache.get(material);
+}
+
+/**
+ * Ordnet ein Mesh einem Taster aus PUSH_BUTTONS zu, wenn es dessen Kappe ist:
+ * Mitte ueber dem Taster, mit Abstand zur Platine und weit herausragend - das
+ * Gehaeuse samt Deckblechen bleibt Teil des Batches.
+ * Gerechnet wird im ungekippten Modell (Welt = CAD (x, z, -y) * Massstab).
+ */
+function matchPushButtonCap(box) {
+  const tolerance = 0.8 * WORLD_PER_MM;
+  const centerX = (box.min.x + box.max.x) / 2;
+  const centerZ = (box.min.z + box.max.z) / 2;
+
+  for (const button of PUSH_BUTTONS) {
+    if (Math.abs(centerX - button.x * WORLD_PER_MM) > tolerance) continue;
+    if (Math.abs(centerZ + button.y * WORLD_PER_MM) > tolerance) continue;
+
+    // Abstand der Innen- und Aussenseite des Teils zur Platinenoberflaeche
+    const [inner, outer] =
+      button.side === "bottom"
+        ? [BOARD.bottomSurfaceZ * WORLD_PER_MM - box.max.y, BOARD.bottomSurfaceZ * WORLD_PER_MM - box.min.y]
+        : [box.min.y - BOARD.topSurfaceZ * WORLD_PER_MM, box.max.y - BOARD.topSurfaceZ * WORLD_PER_MM];
+    if (
+      inner >= PUSH_BUTTON_CAP_MM.gap * WORLD_PER_MM &&
+      outer >= PUSH_BUTTON_CAP_MM.top * WORLD_PER_MM
+    ) {
+      return button;
+    }
+  }
+  return null;
+}
+
+/**
+ * Ordnet ein Mesh einem begehbaren Bauteil zu, wenn es komplett in dessen
+ * CAD-Rechteck liegt (ungekippt: Welt = CAD (x, z, -y) * Massstab) und
+ * merklich ueber die Platine ragt. Flache Loetpads bleiben Teil der Platine -
+ * durchscheinend wuerden sie mit der Platinenoberflaeche flackern.
+ */
+function matchEnterablePart(box) {
+  for (const part of ENTERABLE_PARTS) {
+    const onSide = part.side === "bottom" ? box.max.y <= BOARD_MID_Y : box.min.y >= BOARD_MID_Y;
+    const height =
+      part.side === "bottom"
+        ? BOARD.bottomSurfaceZ * WORLD_PER_MM - box.min.y
+        : box.max.y - BOARD.topSurfaceZ * WORLD_PER_MM;
+    if (
+      onSide &&
+      height >= ENTERABLE_MIN_HEIGHT_MM * WORLD_PER_MM &&
+      box.min.x >= part.minX * WORLD_PER_MM &&
+      box.max.x <= part.maxX * WORLD_PER_MM &&
+      box.min.z >= -part.maxY * WORLD_PER_MM &&
+      box.max.z <= -part.minY * WORLD_PER_MM
+    ) {
+      return part;
+    }
+  }
+  return null;
+}
+
+/**
+ * Zerlegt begehbare Bauteile in Quader. Je Rasterzelle wird ein senkrechter
+ * Strahl durch jedes Mesh geschickt; die Schnitthoehen paarweise ergeben die
+ * Abschnitte, in denen Material ist (geschlossene CAD-Solids vorausgesetzt).
+ * Benachbarte Zellen mit gleichen Abschnitten werden zu Rechtecken vereint.
+ *
+ * Ergebnis in der Orientierung der jeweiligen Seite (+Y = weg von der Platine).
+ */
+function buildSolids(enterableParts, flip, collision) {
+  const solids = { top: [], bottom: [] };
+  const cell = ENTERABLE_CELL_MM * WORLD_PER_MM;
+  // Abschnitte duenner als das zaehlen nicht - Rundungsrauschen.
+  const minThickness = WORLD_PER_MM * 0.05;
+  const quantum = WORLD_PER_MM * 0.02;
+
+  const matrix = new THREE.Matrix4();
+  const a = new THREE.Vector3();
+  const b = new THREE.Vector3();
+  const c = new THREE.Vector3();
+
+  for (const [part, meshes] of enterableParts) {
+    const walkY = collision[part.side].walkY;
+    /** Zellschluessel -> Liste [unten, oben] ueber alle Meshes. */
+    const cells = new Map();
+
+    for (const mesh of meshes) {
+      matrix.copy(mesh.matrixWorld);
+      if (part.side === "bottom") matrix.premultiply(flip);
+
+      const position = mesh.geometry.attributes.position;
+      const index = mesh.geometry.index;
+      const count = index ? index.count : position.count;
+      const hits = new Map();
+
+      for (let i = 0; i < count; i += 3) {
+        a.fromBufferAttribute(position, index ? index.getX(i) : i).applyMatrix4(matrix);
+        b.fromBufferAttribute(position, index ? index.getX(i + 1) : i + 1).applyMatrix4(matrix);
+        c.fromBufferAttribute(position, index ? index.getX(i + 2) : i + 2).applyMatrix4(matrix);
+
+        const area = (b.x - a.x) * (c.z - a.z) - (c.x - a.x) * (b.z - a.z);
+        if (Math.abs(area) < 1e-12) continue;
+
+        const col0 = Math.floor(Math.min(a.x, b.x, c.x) / cell);
+        const col1 = Math.floor(Math.max(a.x, b.x, c.x) / cell);
+        const row0 = Math.floor(Math.min(a.z, b.z, c.z) / cell);
+        const row1 = Math.floor(Math.max(a.z, b.z, c.z) / cell);
+
+        for (let col = col0; col <= col1; col++) {
+          // Kleiner Versatz, damit kein Strahl genau eine Dreieckskante trifft.
+          const px = (col + 0.5) * cell + 1.3e-6;
+          for (let row = row0; row <= row1; row++) {
+            const pz = (row + 0.5) * cell + 0.7e-6;
+            const w0 = ((b.x - px) * (c.z - pz) - (c.x - px) * (b.z - pz)) / area;
+            if (w0 < 0 || w0 > 1) continue;
+            const w1 = ((c.x - px) * (a.z - pz) - (a.x - px) * (c.z - pz)) / area;
+            if (w1 < 0 || w1 > 1) continue;
+            const w2 = 1 - w0 - w1;
+            if (w2 < 0) continue;
+
+            const key = `${col},${row}`;
+            if (!hits.has(key)) hits.set(key, []);
+            hits.get(key).push(w0 * a.y + w1 * b.y + w2 * c.y);
+          }
+        }
+      }
+
+      for (const [key, heights] of hits) {
+        heights.sort((u, v) => u - v);
+        if (!cells.has(key)) cells.set(key, []);
+        for (let k = 0; k + 1 < heights.length; k += 2) {
+          const bottom = Math.max(heights[k], walkY);
+          const top = heights[k + 1];
+          if (top - bottom >= minThickness) cells.get(key).push([bottom, top]);
+        }
+      }
+    }
+
+    // Gleiche (gerundete) Abschnitte sammeln und je Abschnitt zu Rechtecken mergen.
+    const byInterval = new Map();
+    for (const [key, intervals] of cells) {
+      const [col, row] = key.split(",").map(Number);
+      for (const [bottom, top] of mergeIntervals(intervals)) {
+        const id = `${Math.round(bottom / quantum)}|${Math.round(top / quantum)}`;
+        if (!byInterval.has(id)) byInterval.set(id, { bottom, top, cells: [] });
+        const entry = byInterval.get(id);
+        entry.bottom = Math.min(entry.bottom, bottom);
+        entry.top = Math.max(entry.top, top);
+        entry.cells.push([col, row]);
+      }
+    }
+
+    let boxCount = 0;
+    for (const { bottom, top, cells: list } of byInterval.values()) {
+      for (const rect of mergeCellRects(list)) {
+        solids[part.side].push({
+          id: part.id,
+          minX: rect.col0 * cell,
+          maxX: (rect.col1 + 1) * cell,
+          minZ: rect.row0 * cell,
+          maxZ: (rect.row1 + 1) * cell,
+          bottom,
+          top,
+        });
+        boxCount++;
+      }
+    }
+    console.log(`[Platine] ${part.id} begehbar: ${meshes.length} Meshes, ${boxCount} Kollisionsquader.`);
+  }
+
+  return solids;
+}
+
+/**
+ * Platz ueber der Oberseite jedes Quaders bis zum naechsten Quader darueber
+ * (`headroom`, Infinity = frei). Passt der Chip dort nicht hin, ist die
+ * Oberseite keine Stufe, sondern Wand - z.B. die Kante an der Oeffnung von J3
+ * direkt unter dem Ueberhang.
+ */
+function computeHeadroom(boxes) {
+  const epsilon = WORLD_PER_MM * 0.02;
+  for (const box of boxes) {
+    let headroom = Infinity;
+    for (const other of boxes) {
+      if (other === box || other.bottom < box.top - epsilon) continue;
+      if (
+        other.minX < box.maxX &&
+        other.maxX > box.minX &&
+        other.minZ < box.maxZ &&
+        other.maxZ > box.minZ
+      ) {
+        headroom = Math.min(headroom, other.bottom - box.top);
+      }
+    }
+    box.headroom = headroom;
+  }
+}
+
+/** Vereint ueberlappende Abschnitte [unten, oben]. */
+function mergeIntervals(intervals) {
+  const sorted = [...intervals].sort((u, v) => u[0] - v[0]);
+  const merged = [];
+  for (const [bottom, top] of sorted) {
+    const last = merged[merged.length - 1];
+    if (last && bottom <= last[1]) last[1] = Math.max(last[1], top);
+    else merged.push([bottom, top]);
+  }
+  return merged;
+}
+
+/**
+ * Fasst Rasterzellen zu moeglichst wenigen Rechtecken zusammen: erst Laeufe
+ * je Zeile, dann gleich breite Laeufe uebereinanderliegender Zeilen.
+ */
+function mergeCellRects(cells) {
+  const rows = new Map();
+  for (const [col, row] of cells) {
+    if (!rows.has(row)) rows.set(row, []);
+    rows.get(row).push(col);
+  }
+
+  const open = new Map();
+  const rects = [];
+  for (const row of [...rows.keys()].sort((u, v) => u - v)) {
+    const cols = rows.get(row).sort((u, v) => u - v);
+    const runs = [];
+    let start = cols[0];
+    for (let k = 1; k <= cols.length; k++) {
+      if (k === cols.length || cols[k] !== cols[k - 1] + 1) {
+        runs.push([start, cols[k - 1]]);
+        start = cols[k];
+      }
+    }
+
+    const next = new Map();
+    for (const [col0, col1] of runs) {
+      const key = `${col0},${col1}`;
+      const rect = open.get(key);
+      if (rect && rect.row1 === row - 1) {
+        rect.row1 = row;
+        next.set(key, rect);
+        open.delete(key);
+      } else {
+        const created = { col0, col1, row0: row, row1: row };
+        rects.push(created);
+        next.set(key, created);
+      }
+    }
+    open.clear();
+    for (const [key, rect] of next) open.set(key, rect);
+  }
+  return rects;
+}
+
+/**
+ * Baut aus den gefundenen Kappen je Taster ein eigenes, bewegliches Objekt.
+ * Grundriss und Oberkante stehen - wie Hindernisse und Hoehenraster - in der
+ * Orientierung der jeweiligen Seite.
+ */
+function buildPushButtons(capParts, groups, flip) {
+  const buttons = [];
+  const sideBox = new THREE.Box3();
+
+  for (const config of PUSH_BUTTONS) {
+    const parts = capParts.get(config);
+    if (!parts) {
+      console.warn(`[Platine] Kappe von Taster ${config.id} nicht gefunden.`);
+      continue;
+    }
+
+    const object3D = new THREE.Group();
+    object3D.name = `Taster ${config.id}`;
+    const footprint = new THREE.Box3();
+
+    for (const { object, box } of parts) {
+      object3D.add(createBatch(bakeGeometry(object, false), object.material));
+      sideBox.copy(box);
+      if (config.side === "bottom") sideBox.applyMatrix4(flip);
+      footprint.union(sideBox);
+    }
+
+    groups[config.side].add(object3D);
+    buttons.push({
+      id: config.id,
+      label: config.label,
+      side: config.side,
+      minX: footprint.min.x,
+      maxX: footprint.max.x,
+      minZ: footprint.min.z,
+      maxZ: footprint.max.z,
+      /** Oberkante der Kappe in Ruhelage. */
+      top: footprint.max.y,
+      travel: PUSH_BUTTON_TRAVEL_MM * WORLD_PER_MM,
+      depth: 0,
+      object3D,
+    });
+  }
+
+  return buttons;
 }
 
 /**

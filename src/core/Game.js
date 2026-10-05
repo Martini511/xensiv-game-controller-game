@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { createRenderer } from "./createRenderer.js";
 import { createScene } from "./createScene.js";
 import { ThirdPersonCamera } from "./ThirdPersonCamera.js";
-import { Board } from "./Board.js";
+import { Board, HEIGHT_CELL_SIZE } from "./Board.js";
 import { IntroSequence } from "./IntroSequence.js";
 import {
   PLATINE_BYTES,
@@ -14,6 +14,7 @@ import {
 } from "./model-loader.js";
 import {
   ACTION_BUTTON,
+  CHARACTER_HEIGHT,
   EXPLORE_BUTTON,
   FALL_COMMIT_MM,
   FALL_DEATH_Y,
@@ -90,8 +91,30 @@ const MIN_SUPPORT_RATIO = 0.5;
  */
 const STEP_UP_LIMIT = OBSTACLE_HEIGHT_MM * WORLD_PER_MM;
 
+/**
+ * Hoehenunterschied, den Oberflaechendetails (Beschriftung, Markierungen) auf
+ * einem Bauteil haben duerfen, ohne dass es fuer die darauf stehende Figur zur
+ * Wand wird. Bewusst klein: verdeckte Zwischenschichten im Bauteil (z.B. die
+ * Ebene 0.64 mm ueber der Platine im ELV1411A) duerfen keine Treppe sein.
+ */
+const SURFACE_TOLERANCE = WORLD_PER_MM * 0.1;
+
 /** Fallhoehe unter der Laufebene, ab der der Sturz nicht mehr zu retten ist. */
 const FALL_COMMIT_DEPTH = FALL_COMMIT_MM * WORLD_PER_MM;
+
+/** Wie schnell eine Tasterkappe ein- bzw. zurueckfedert (1/Sekunde). */
+const BUTTON_PRESS_RATE = 30;
+const BUTTON_RELEASE_RATE = 18;
+/** Wie weit die Fuesse unter der eingedrueckten Kappe liegen duerfen (Weltunits). */
+const BUTTON_CONTACT_TOLERANCE = 0.08;
+
+/** Spielraum, ab dem eine Quader-Unterkante ueber dem Kopf als Decke zaehlt. */
+const CEILING_TOLERANCE = WORLD_PER_MM * 0.05;
+
+/** Deckkraft eines begehbaren Bauteils, solange der Chip darin steht. */
+const PART_INSIDE_OPACITY = 0.3;
+/** Wie schnell es ein- und ausblendet (1/Sekunde). */
+const PART_FADE_RATE = 10;
 
 /**
  * Zentrale Klasse: haelt Szene, Kamera, Input und Entities zusammen und
@@ -128,12 +151,7 @@ export class Game {
       lookAtHeight: 0.5,
       collider: (origin, direction, distance) =>
         this.board
-          ? clampDistanceToBoxes(
-              origin,
-              direction,
-              distance,
-              this.board.cameraBlockers[this.currentSide]
-            )
+          ? clampDistanceToBoxes(origin, direction, distance, this._activeCameraBlockers())
           : distance,
     });
 
@@ -178,6 +196,10 @@ export class Game {
     this._isTransitioning = false;
     this._verticalVelocity = 0;
     this._isGrounded = true;
+    /** id des begehbaren Bauteils, in dem der Chip gerade steht. */
+    this._insidePart = null;
+    this._cameraBlockers = null;
+    this._partOpacity = new Map();
 
     this._clock = new THREE.Clock();
     this._frameId = null;
@@ -344,6 +366,8 @@ export class Game {
     this.character.update(deltaTime);
     this._resolveCollisions();
     this._updateGrounding(deltaTime);
+    this._updatePushButtons(deltaTime);
+    this._updateEnterableParts(deltaTime);
 
     // 5. Interaktionen auswerten
     this._updatePortal(input, locked);
@@ -459,13 +483,111 @@ export class Game {
     if (!this.board || this.state === "falling") return;
 
     const position = this.character.position;
+    // Bauteile, auf deren Oberseite man steht, sind keine Wand - auch wenn die
+    // Box-Oberkante knapp darueber liegt (z.B. 0.01 mm beim ELV1411A). Sonst
+    // wird die Figur am Rand heruntergeschoben.
     resolveBoxVsBoxes(
       position,
       this.character.halfExtents,
       this.character.object3D.rotation.y,
       this.board.obstacles[this.currentSide],
-      position.y
+      position.y + SURFACE_TOLERANCE
     );
+    // Feine Kollision begehbarer Bauteile (J3): nur was auf Koerperhoehe liegt.
+    resolveBoxVsBoxes(
+      position,
+      this.character.halfExtents,
+      this.character.object3D.rotation.y,
+      this._solidWalls(),
+      -Infinity
+    );
+  }
+
+  /**
+   * Quader begehbarer Bauteile, die auf der aktuellen Hoehe eine Wand sind:
+   * auf Koerperhoehe und zu hoch zum Hinaufsteigen - oder ohne Platz fuer den
+   * Chip ueber ihrer Oberseite. Unter den Kontakten im Steckverbinder laeuft
+   * man hindurch, auf dem Quader, auf dem man steht, sowieso.
+   */
+  _solidWalls() {
+    const feet = this.character.position.y;
+    return this.board.solids[this.currentSide].filter(
+      (box) =>
+        box.bottom < feet + CHARACTER_HEIGHT &&
+        box.top > feet + SURFACE_TOLERANCE &&
+        (box.top > feet + STEP_UP_LIMIT || box.headroom < CHARACTER_HEIGHT)
+    );
+  }
+
+  /**
+   * Niedrigste Unterkante eines Quaders ueber dem Kopf, sonst Infinity. Ohne
+   * diese Decke sprange der Chip im Steckverbinder durchs Dach.
+   */
+  _ceilingHeight(headY) {
+    return this._ceilingBox(headY)?.bottom ?? Infinity;
+  }
+
+  /** Der Quader, der direkt ueber dem Kopf die Decke bildet - oder null. */
+  _ceilingBox(headY) {
+    const position = this.character.position;
+    const angle = this.character.object3D.rotation.y;
+    const { x: halfX, y: halfZ } = this.character.halfExtents;
+    // Achsenparalleler Rahmen um den gedrehten Grundriss
+    const extentX = Math.abs(Math.cos(angle)) * halfX + Math.abs(Math.sin(angle)) * halfZ;
+    const extentZ = Math.abs(Math.sin(angle)) * halfX + Math.abs(Math.cos(angle)) * halfZ;
+
+    let ceiling = null;
+    for (const box of this.board.solids[this.currentSide]) {
+      if (box.bottom < headY - CEILING_TOLERANCE) continue;
+      if (ceiling && box.bottom >= ceiling.bottom) continue;
+      if (
+        position.x + extentX > box.minX &&
+        position.x - extentX < box.maxX &&
+        position.z + extentZ > box.minZ &&
+        position.z - extentZ < box.maxZ
+      ) {
+        ceiling = box;
+      }
+    }
+    return ceiling;
+  }
+
+  /**
+   * Steht der Chip unter dem Dach eines begehbaren Bauteils, wird es
+   * durchscheinend, und die Kamera ignoriert es - sonst klebte sie im
+   * Steckverbinder direkt hinter dem Chip.
+   */
+  _updateEnterableParts(deltaTime) {
+    if (!this.board) return;
+
+    const head = this.character.position.y + CHARACTER_HEIGHT;
+    const inside = this.state === "falling" ? null : this._ceilingBox(head)?.id ?? null;
+    if (inside !== this._insidePart) {
+      this._insidePart = inside;
+      this._cameraBlockers = null;
+    }
+
+    const alpha = 1 - Math.exp(-PART_FADE_RATE * deltaTime);
+    for (const id of this.board.enterableMaterials.keys()) {
+      const target = id === inside ? PART_INSIDE_OPACITY : 1;
+      const current = this._partOpacity.get(id) ?? 1;
+      const next = Math.abs(target - current) < 0.01 ? target : current + (target - current) * alpha;
+      if (next !== current) {
+        this._partOpacity.set(id, next);
+        this.board.setPartOpacity(id, next);
+      }
+    }
+  }
+
+  /** Kamera-Blocker der aktuellen Seite, ohne das Bauteil, in dem der Chip steht. */
+  _activeCameraBlockers() {
+    const all = this.board.cameraBlockers[this.currentSide];
+    if (!this._insidePart) return all;
+    if (!this._cameraBlockers || this._cameraBlockersSide !== this.currentSide) {
+      this._cameraBlockers = all.filter((box) => box.id !== this._insidePart);
+      this._cameraBlockersSide = this.currentSide;
+    }
+    return this._cameraBlockers;
   }
 
   /**
@@ -488,8 +610,17 @@ export class Game {
       this._verticalVelocity = 0;
     }
 
+    const headBefore = position.y + CHARACTER_HEIGHT;
     this._verticalVelocity += GRAVITY * deltaTime;
     position.y += this._verticalVelocity * deltaTime;
+
+    if (this._verticalVelocity > 0 && this.board) {
+      const ceiling = this._ceilingHeight(headBefore);
+      if (position.y + CHARACTER_HEIGHT > ceiling) {
+        position.y = ceiling - CHARACTER_HEIGHT;
+        this._verticalVelocity = 0;
+      }
+    }
 
     if (!overVoid && position.y <= groundY) {
       position.y = groundY;
@@ -522,7 +653,12 @@ export class Game {
   _groundHeight() {
     if (!this.board) return this.levels[this.currentSide].y;
 
-    const { height, support } = this._sampleGround(this.character.position.y + STEP_UP_LIMIT);
+    const feet = this.character.position.y;
+    // Hinauf nur so weit, wie ueber dem Kopf Platz ist. Sonst stiege der Chip
+    // im Steckverbinder auf eine Kante unter dem Dach, steckte mit dem Kopf im
+    // Material und wuerde seitlich - womoeglich nach aussen - herausgedrueckt.
+    const headroom = this._ceilingHeight(feet + CHARACTER_HEIGHT) - CHARACTER_HEIGHT;
+    const { height, support } = this._sampleGround(Math.min(feet + STEP_UP_LIMIT, headroom));
     if (support < MIN_SUPPORT_RATIO) return NaN;
     // Zu hohe Flaechen tragen nur, wer schon steht. In der Luft waere das eine
     // unsichtbare Plattform mitten im Bohrloch.
@@ -532,13 +668,14 @@ export class Game {
 
   /**
    * Setzt die Figur beim Spawn oder Teleport auf die Oberflaeche unter ihr.
-   * Hier gilt die Stufengrenze *nicht* - sonst wuerde sie z.B. auf dem Display
-   * nicht oben landen, sondern darin stecken und herausgeschoben werden.
+   * Hier gilt weder die Stufengrenze noch der Wandfilter - sonst wuerde sie
+   * z.B. auf dem Display nicht oben landen, sondern darin stecken und
+   * herausgeschoben werden.
    */
   _snapToGround() {
     if (!this.board) return;
 
-    const { height } = this._sampleGround(Infinity);
+    const { height } = this._sampleGround(Infinity, false);
     if (!Number.isNaN(height)) this.character.position.y = height;
   }
 
@@ -548,41 +685,94 @@ export class Game {
    * ist ein starrer Koerper und sinkt nicht in Bauteile ein, klettert aber
    * auch nicht von selbst auf hohe hinauf.
    */
-  _sampleGround(stepLimit) {
+  _sampleGround(stepLimit, skipWalls = true) {
+    const side = this.currentSide;
+    // Bauteile, die auf dieser Hoehe eine Wand sind, liefern keinen Boden.
+    // Sonst klettert die Figur an ihnen hoch bzw. rutscht an ihnen herunter:
+    // Das Raster reicht bis zu einer Zelle ueber den Bauteilrand hinaus, und
+    // verdeckte Zwischenschichten (ELV1411A, Steckverbinder J3) wirken als
+    // Treppenstufen.
+    const wallTop = this.character.position.y + SURFACE_TOLERANCE;
+    const walls = skipWalls
+      ? [...this.board.obstacles[side].filter((box) => box.top > wallTop), ...this._solidWalls()]
+      : [];
+
+    let height = NaN;
+    let supported = 0;
+    let total = 0;
+
+    this._forEachFootprintSample((sampleX, sampleZ) => {
+      total++;
+      if (!this.board.hasGround(side, sampleX, sampleZ)) return;
+
+      // Traegt die Figur, auch wenn zu hoch zum Hochsteigen - sonst wuerde
+      // sie direkt neben einem Bauteil ins Leere kippen.
+      supported++;
+
+      if (walls.some((box) => insideBox(box, sampleX, sampleZ, HEIGHT_CELL_SIZE))) return;
+
+      // Die Stufengrenze waehlt die Schicht: unter dem Display die Platine,
+      // oben darauf die Display-Oberseite.
+      const sample = this.board.sampleHeight(side, sampleX, sampleZ, stepLimit);
+      if (Number.isNaN(sample)) return;
+      if (Number.isNaN(height) || sample > height) height = sample;
+    });
+
+    return { height, support: supported / total };
+  }
+
+  /** Ruft `callback(x, z)` fuer jeden Rasterpunkt des - mitgedrehten - Grundrisses. */
+  _forEachFootprintSample(callback) {
     const position = this.character.position;
     const angle = this.character.object3D.rotation.y;
     const cos = Math.cos(angle);
     const sin = Math.sin(angle);
     const { x: halfX, y: halfZ } = this.character.halfExtents;
 
-    let height = NaN;
-    let supported = 0;
-    let total = 0;
-
     for (let i = 0; i < GROUND_SAMPLES; i++) {
       const localX = ((i / (GROUND_SAMPLES - 1)) * 2 - 1) * halfX;
 
       for (let j = 0; j < GROUND_SAMPLES; j++) {
         const localZ = ((j / (GROUND_SAMPLES - 1)) * 2 - 1) * halfZ;
-        const sampleX = position.x + localX * cos + localZ * sin;
-        const sampleZ = position.z - localX * sin + localZ * cos;
-
-        total++;
-        if (!this.board.hasGround(this.currentSide, sampleX, sampleZ)) continue;
-
-        // Traegt die Figur, auch wenn zu hoch zum Hochsteigen - sonst wuerde
-        // sie direkt neben einem Bauteil ins Leere kippen.
-        supported++;
-
-        // Die Stufengrenze waehlt die Schicht: unter dem Display die Platine,
-        // oben darauf die Display-Oberseite.
-        const sample = this.board.sampleHeight(this.currentSide, sampleX, sampleZ, stepLimit);
-        if (Number.isNaN(sample)) continue;
-        if (Number.isNaN(height) || sample > height) height = sample;
+        callback(position.x + localX * cos + localZ * sin, position.z - localX * sin + localZ * cos);
       }
     }
+  }
 
-    return { height, support: supported / total };
+  /**
+   * Taster S1/S2: Steht der Chip auf einer Kappe - egal ob hingesprungen oder
+   * hinaufgelaufen -, federt sie ein; er sinkt ueber die Bodenhaftung mit.
+   * Springt er ab, federt sie zurueck.
+   */
+  _updatePushButtons(deltaTime) {
+    if (!this.board) return;
+
+    const standing = this._isGrounded && this.state !== "falling";
+    const feetY = this.character.position.y;
+    const pressed = new Set();
+    if (standing) {
+      this._forEachFootprintSample((x, z) => {
+        const button = this.board.pushButtonAt(this.currentSide, x, z);
+        if (button && feetY >= button.top - button.travel - BUTTON_CONTACT_TOLERANCE) {
+          pressed.add(button);
+        }
+      });
+    }
+
+    for (const button of this.board.pushButtons) {
+      const down = pressed.has(button);
+      const target = down ? button.travel : 0;
+      const rate = down ? BUTTON_PRESS_RATE : BUTTON_RELEASE_RATE;
+      const depth = button.depth + (target - button.depth) * (1 - Math.exp(-rate * deltaTime));
+      this.board.setPushButtonDepth(button, Math.abs(target - depth) < 1e-4 ? target : depth);
+
+      if (down && !button.isDown && button.depth > button.travel * 0.5) {
+        button.isDown = true;
+        console.log(`[Taster] ${button.id} (${button.label}) gedrueckt`);
+      } else if (!down && button.isDown && button.depth < button.travel * 0.5) {
+        button.isDown = false;
+      }
+    }
   }
 
   /** Prueft die Triggerzone der Kontrollflaeche und startet ggf. den Wechsel. */
@@ -881,3 +1071,6 @@ export class Game {
 }
 
 const formatPosition = (v) => `${v.x.toFixed(1)} / ${v.z.toFixed(1)}`;
+
+const insideBox = (box, x, z, margin) =>
+  x >= box.minX - margin && x <= box.maxX + margin && z >= box.minZ - margin && z <= box.maxZ + margin;
