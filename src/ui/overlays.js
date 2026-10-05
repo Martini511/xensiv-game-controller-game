@@ -22,10 +22,12 @@ export class LoadingOverlay {
 
   /** @param {number|null} progress 0..1, oder null wenn nicht ermittelbar */
   setProgress(progress) {
-    this.label.textContent =
-      progress === null || progress === undefined
-        ? "Lädt Modell…"
-        : `Lädt Modell… ${Math.round(progress * 100)} %`;
+    if (progress === null || progress === undefined || !Number.isFinite(progress)) {
+      this.label.textContent = "Lädt Modell…";
+      return;
+    }
+    const percent = Math.round(Math.min(Math.max(progress, 0), 1) * 100);
+    this.label.textContent = `Lädt Modell… ${percent} %`;
   }
 
   setError(message) {

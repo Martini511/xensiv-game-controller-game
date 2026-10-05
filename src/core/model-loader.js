@@ -12,13 +12,19 @@ import playerUrl from "../assets/player.glb?url";
 
 export const PLATINE_URL = platineUrl;
 export const PLAYER_URL = playerUrl;
+/** Unkomprimierte Dateigroesse, beim Build von vite.config.js eingesetzt. */
+export const PLATINE_BYTES = __PLATINE_BYTES__;
 
 /**
  * Promise-basiertes Laden. `onProgress` bekommt einen Wert 0..1 bzw. null,
- * wenn der Server keine Content-Length liefert (dann ist kein Fortschritt
- * berechenbar).
+ * wenn kein Fortschritt berechenbar ist.
+ *
+ * Mit `expectedBytes` (unkomprimierte Dateigroesse) wird der Fortschritt
+ * daran gemessen: Liefert der Server die Datei komprimiert aus (gzip), nennt
+ * Content-Length nur die komprimierte Groesse, gezaehlt werden aber die
+ * entpackten Bytes - ohne diese Angabe stiege der Wert weit ueber 100 %.
  */
-export function loadGLTF(url = platineUrl, onProgress) {
+export function loadGLTF(url = platineUrl, onProgress, expectedBytes = 0) {
   const loader = new GLTFLoader();
 
   return new Promise((resolve, reject) => {
@@ -27,7 +33,13 @@ export function loadGLTF(url = platineUrl, onProgress) {
       (gltf) => resolve(gltf),
       (event) => {
         if (!onProgress) return;
-        onProgress(event.lengthComputable ? event.loaded / event.total : null);
+        const total = expectedBytes || (event.lengthComputable ? event.total : 0);
+        // Mehr Bytes als angekuendigt: Gesamtgroesse ist unbrauchbar (Kompression).
+        if (!total || (!expectedBytes && event.loaded > total)) {
+          onProgress(null);
+          return;
+        }
+        onProgress(Math.min(event.loaded / total, 1));
       },
       (error) => reject(new Error(`Modell konnte nicht geladen werden: ${url}`, { cause: error }))
     );
