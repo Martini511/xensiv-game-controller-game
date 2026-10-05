@@ -79,7 +79,8 @@ unter **Settings → Pages → Source** auf *GitHub Actions* stellen.
 | T (Y, Button 3)        | Kontrollflaeche benutzen / Meldung bestaetigen |
 | F (A, Button 0)        | Springen / Intro ueberspringen                |
 | L1 R1 L2 R2 L3 R3      | Sensor markieren (jeweils die passende Taste)  |
-| D-Pad runter (13)      | Infobildschirm mit der Steuerung oeffnen       |
+| D-Pad runter (13)      | Infobildschirm oeffnen; dort Reiter "Controls" |
+| D-Pad hoch (12)        | Im Infobildschirm: Reiter "Mission"            |
 
 Die Bewegung ist kamerarelativ: Stick nach oben bewegt den Charakter immer
 von der Kamera weg.

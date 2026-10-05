@@ -343,6 +343,61 @@
         font-size: 13px;
       }
 
+      .message-tab {
+        border-top: 1px solid rgba(255, 255, 255, 0.1);
+      }
+
+      .message-tab-head {
+        display: flex;
+        align-items: baseline;
+        gap: 10px;
+        padding: 8px 0;
+        color: #aebdd0;
+        font-size: 13px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .message-tab-label::before {
+        content: "\25b8";
+        display: inline-block;
+        width: 1.2em;
+      }
+
+      .message-tab.is-open .message-tab-label {
+        color: #ffd166;
+      }
+
+      .message-tab.is-open .message-tab-label::before {
+        content: "\25be";
+      }
+
+      .message-tab-key {
+        margin-left: auto;
+        font-family: "Cascadia Mono", "Consolas", monospace;
+        letter-spacing: 0;
+        text-transform: none;
+        opacity: 0.7;
+      }
+
+      .message-tab.is-open .message-tab-key {
+        visibility: hidden;
+      }
+
+      .message-tab-body {
+        padding-bottom: 6px;
+      }
+
+      .message-tab:not(.is-open) .message-tab-body {
+        display: none;
+      }
+
+      .message-tab-body > .control-table:first-child {
+        margin-top: 0;
+        padding-top: 0;
+        border-top: 0;
+      }
+
       .control-table {
         display: grid;
         grid-template-columns: max-content 1fr;

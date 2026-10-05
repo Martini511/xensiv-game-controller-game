@@ -51,12 +51,11 @@ export class MessageOverlay {
   }
 
   /**
-   * @param {{title: string, body?: string[], controls?: {key: string, action: string}[],
-   *          footer?: string, tone?: string}} content
-   */
-  /**
+   * Mit `tabs` landen Text + Bestzeiten und die Steuerung in zwei Reitern,
+   * von denen immer genau einer offen ist - anfangs der Info-Reiter.
    * @param {{title: string, body?: string[], controls?: {key: string, action: string}[],
    *          scores?: {seconds: number, date: string}[], highlight?: number,
+   *          tabs?: {info: {label: string, key: string}, controls: {label: string, key: string}},
    *          footer?: string, tone?: string}} content
    */
   show({
@@ -65,19 +64,44 @@ export class MessageOverlay {
     controls = [],
     scores = [],
     highlight = 0,
+    tabs = null,
     footer = "",
     tone = "neutral",
   }) {
-    this.content = { title, body, controls, scores, highlight, footer, tone };
+    this.content = { title, body, controls, scores, highlight, tabs, footer, tone };
     this.card.className = `message-card tone-${tone}`;
-    this.card.replaceChildren(
-      heading(title),
+
+    const info = [
       ...body.map((line) => paragraph(line)),
       ...(scores.length ? [scoreTable(scores, highlight)] : []),
-      ...(controls.length ? [controlTable(controls)] : []),
-      footerLine(footer)
-    );
+    ];
+    const controlNodes = controls.length ? [controlTable(controls)] : [];
+
+    this._tabs = null;
+    if (tabs) {
+      this._tabs = {
+        info: tabSection(tabs.info, info),
+        controls: tabSection(tabs.controls, controlNodes),
+      };
+      this.openTab("info");
+      this.card.replaceChildren(
+        heading(title),
+        this._tabs.info,
+        this._tabs.controls,
+        footerLine(footer)
+      );
+    } else {
+      this.card.replaceChildren(heading(title), ...info, ...controlNodes, footerLine(footer));
+    }
     this.element.hidden = false;
+  }
+
+  /** @param {"info"|"controls"} name */
+  openTab(name) {
+    if (!this._tabs) return;
+    for (const [key, section] of Object.entries(this._tabs)) {
+      section.classList.toggle("is-open", key === name);
+    }
   }
 
   hide() {
@@ -251,6 +275,28 @@ function paragraph(text) {
   const node = document.createElement("p");
   node.textContent = text;
   return node;
+}
+
+function tabSection({ label, key }, children) {
+  const section = document.createElement("div");
+  section.className = "message-tab";
+
+  const head = document.createElement("div");
+  head.className = "message-tab-head";
+  const labelNode = document.createElement("span");
+  labelNode.className = "message-tab-label";
+  labelNode.textContent = label;
+  const keyNode = document.createElement("span");
+  keyNode.className = "message-tab-key";
+  keyNode.textContent = key;
+  head.append(labelNode, keyNode);
+
+  const content = document.createElement("div");
+  content.className = "message-tab-body";
+  content.append(...children);
+
+  section.append(head, content);
+  return section;
 }
 
 /** Eine Zeile je Taste - gerendert als zweispaltiges Grid. */

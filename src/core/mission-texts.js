@@ -41,6 +41,10 @@ export const BRIEFING = {
     "The clock runs while you play. Your five fastest runs are kept.",
   ],
   controls: CONTROLS,
+  tabs: {
+    info: { label: "Mission", key: BUTTON_LABELS.DPAD_UP },
+    controls: { label: "Controls", key: BUTTON_LABELS.DPAD_DOWN },
+  },
   footer: `Press ${T} to close this screen \u00b7 press ${INFO} to open it again`,
   tone: "neutral",
 };

@@ -280,6 +280,10 @@ export class Game {
         else this._openInfo();
       }
     } else if (this.state !== "falling") {
+      // D-Pad hoch/runter wechselt zwischen den Reitern des Infobildschirms
+      if (buttons.DPAD_UP.justPressed) this.message.openTab("info");
+      else if (buttons.DPAD_DOWN.justPressed) this.message.openTab("controls");
+
       // Briefing, Sieg und Absturz warten alle auf die Aktionstaste
       if (input.buttons[ACTION_BUTTON].justPressed) this._confirmMessage();
       else if (
