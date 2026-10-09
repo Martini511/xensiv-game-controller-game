@@ -60,6 +60,23 @@ export const BRIEFING = {
 /** Fusszeile des allerersten Briefings - nur dort laesst sich die Jagd ueberspringen. */
 export const BRIEFING_START_FOOTER = `Press ${T} to start the hunt \u00b7 press ${I} to just explore the board`;
 
+/**
+ * Kurzfassung fuer den Start: nur das Wichtigste, hervorgehoben mit **...**.
+ * Der ausfuehrliche Text (BRIEFING) erscheint, wenn man den Infobildschirm
+ * im Spiel selbst wieder oeffnet.
+ */
+export const BRIEFING_START = {
+  ...BRIEFING,
+  body: [
+    "You have been shrunk down onto the PCB of the XENSIV\u2122 game controller. **Find and mark all 6 magnetic sensors.**",
+    "**Mark each sensor with the button it reads** (L1 \u00b7 R1 \u00b7 L2 \u00b7 R2 \u00b7 L3 \u00b7 R3). Hold that button and its sensor **blinks yellow**.",
+    `**2 sensors are on the front, 4 on the BACK.** Press **${T} on the round CONTROL pad** to switch sides.`,
+    "**Don't fall off the board** - the clock is running!",
+    `Full mission details: press ${INFO} (keyboard ${KEY_LABELS[INFO_BUTTON]}) during the hunt.`,
+  ],
+  footer: BRIEFING_START_FOOTER,
+};
+
 export const VICTORY = {
   title: "All sensors found",
   body: [

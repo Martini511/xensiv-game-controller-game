@@ -308,9 +308,19 @@ function heading(text) {
   return node;
 }
 
+/** Absatz; `**Text**` wird hervorgehoben (siehe `.message-card p strong`). */
 function paragraph(text) {
   const node = document.createElement("p");
-  node.textContent = text;
+  text.split("**").forEach((part, index) => {
+    if (!part) return;
+    if (index % 2 === 0) {
+      node.append(part);
+      return;
+    }
+    const strong = document.createElement("strong");
+    strong.textContent = part;
+    node.append(strong);
+  });
   return node;
 }
 

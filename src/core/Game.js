@@ -51,7 +51,7 @@ import {
 import { addScore, formatTime, loadScores } from "./leaderboard.js";
 import {
   BRIEFING,
-  BRIEFING_START_FOOTER,
+  BRIEFING_START,
   COMPONENT_INFO,
   EXPLORE,
   EXPLORE_MENU,
@@ -438,7 +438,7 @@ export class Game {
     this.titleScreen = null;
     this.runTime = 0;
     this._atStart = true;
-    this.message.show({ ...BRIEFING, footer: BRIEFING_START_FOOTER, scores: loadScores() });
+    this.message.show({ ...BRIEFING_START, scores: loadScores() });
   }
 
   /** Infobildschirm im laufenden Spiel erneut oeffnen - die Uhr pausiert dabei. */
