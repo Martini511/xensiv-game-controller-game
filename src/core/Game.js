@@ -398,9 +398,9 @@ export class Game {
     }
     this.debugOverlay.update(input, {
       fps: this._fps.toFixed(0),
-      seite: this.currentSide,
+      side: this.currentSide,
       pos: formatPosition(this.character.position),
-      eingabe: input.lastDevice === "keyboard" ? "Tastatur/Maus" : "Controller",
+      input: input.lastDevice === "keyboard" ? "Keyboard/Mouse" : "Controller",
     });
     this.renderer.render(this.scene, this.camera);
   }

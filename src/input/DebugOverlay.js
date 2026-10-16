@@ -22,14 +22,14 @@ export class DebugOverlay {
     const lines = [];
 
     if (gamepadState.connected) {
-      lines.push(`<span class="status-connected">● Controller verbunden</span>`);
+      lines.push(`<span class="status-connected">● Controller connected</span>`);
       lines.push(`  ${escapeHtml(truncate(gamepadState.id ?? "", 34))}`);
       lines.push(`  mapping: ${escapeHtml(String(gamepadState.mapping))}`);
     } else {
-      lines.push(`<span class="status-disconnected">● Kein Controller verbunden</span>`);
-      lines.push(`  Taste am Controller druecken,`);
-      lines.push(`  damit der Browser ihn erkennt.`);
-      lines.push(`  Notfall: Tastatur + Maus aktiv.`);
+      lines.push(`<span class="status-disconnected">● No controller connected</span>`);
+      lines.push(`  Press a button on the controller`);
+      lines.push(`  so the browser detects it.`);
+      lines.push(`  Fallback: keyboard + mouse active.`);
     }
 
     lines.push("");
@@ -42,7 +42,7 @@ export class DebugOverlay {
     const namedPressed = Object.entries(gamepadState.buttons)
       .filter(([, state]) => state.pressed)
       .map(([name]) => `${name}${BUTTON_LABELS[name] !== name ? `/${BUTTON_LABELS[name]}` : ""}`);
-    lines.push(`Tasten   ${escapeHtml(namedPressed.join(", ") || "-")}`);
+    lines.push(`Buttons  ${escapeHtml(namedPressed.join(", ") || "-")}`);
     lines.push(
       `Trigger  L2 ${fmt(gamepadState.buttons.L2.value)}  R2 ${fmt(gamepadState.buttons.R2.value)}`
     );
@@ -50,7 +50,7 @@ export class DebugOverlay {
     const pressedButtons = gamepadState.raw.buttons
       .map((button, index) => (button.pressed ? index : null))
       .filter((index) => index !== null);
-    lines.push(`Indizes  ${pressedButtons.length ? pressedButtons.join(", ") : "-"}`);
+    lines.push(`Indices  ${pressedButtons.length ? pressedButtons.join(", ") : "-"}`);
 
     for (const [key, value] of Object.entries(extra)) {
       lines.push(`${key.padEnd(8)} ${value}`);
