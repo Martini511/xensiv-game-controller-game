@@ -111,6 +111,9 @@ const BUTTON_CONTACT_TOLERANCE = 0.08;
 /** Spielraum, ab dem eine Quader-Unterkante ueber dem Kopf als Decke zaehlt. */
 const CEILING_TOLERANCE = WORLD_PER_MM * 0.05;
 
+/** Anteil des Grundrisses, den eine Bauteil-Unterseite ueberdecken muss, um Decke zu sein. */
+const MIN_CEILING_COVER = 0.5;
+
 /** Deckkraft eines begehbaren Bauteils, solange der Chip darin steht. */
 const PART_INSIDE_OPACITY = 0.3;
 /** Wie schnell es ein- und ausblendet (1/Sekunde). */
@@ -200,6 +203,8 @@ export class Game {
     this._insidePart = null;
     this._cameraBlockers = null;
     this._partOpacity = new Map();
+    /** Deckenhoehen je Rasterpunkt des Grundrisses - wiederverwendet je Frame. */
+    this._ceilingSamples = new Float64Array(GROUND_SAMPLES * GROUND_SAMPLES);
 
     this._clock = new THREE.Clock();
     this._frameId = null;
@@ -520,11 +525,26 @@ export class Game {
   }
 
   /**
-   * Niedrigste Unterkante eines Quaders ueber dem Kopf, sonst Infinity. Ohne
-   * diese Decke sprange der Chip im Steckverbinder durchs Dach.
+   * Niedrigste Decke ueber dem Kopf, sonst Infinity: Quader begehbarer
+   * Bauteile (Dach von J3) und Bauteil-Unterseiten aus dem Deckenraster (das
+   * Display). Ohne diese Decke sprange der Chip hindurch.
+   *
+   * Eine Unterseite zaehlt erst, wenn sie mindestens die Haelfte des
+   * Grundrisses ueberdeckt - wie beim Boden. Sonst stiesse man schon mit der
+   * Vorderkante an, wenn man vom Rand aus auf das Display springt.
    */
   _ceilingHeight(headY) {
-    return this._ceilingBox(headY)?.bottom ?? Infinity;
+    const boxCeiling = this._ceilingBox(headY)?.bottom ?? Infinity;
+    const minY = headY - CEILING_TOLERANCE;
+    const samples = this._ceilingSamples;
+    let count = 0;
+    this._forEachFootprintSample((x, z) => {
+      samples[count++] = this.board.ceilingHeight(this.currentSide, x, z, minY);
+    });
+    samples.sort();
+    // Niedrigste Hoehe, unter der der geforderte Anteil des Grundrisses liegt
+    const covered = samples[Math.ceil(count * MIN_CEILING_COVER) - 1];
+    return Math.min(boxCeiling, covered);
   }
 
   /** Der Quader, der direkt ueber dem Kopf die Decke bildet - oder null. */

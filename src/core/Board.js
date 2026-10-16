@@ -36,6 +36,14 @@ const MAX_LAYERS = 6;
 const LAYER_MERGE = WORLD_PER_MM * 0.6;
 
 /**
+ * Hoehenbereich (mm ueber der Laufebene), in dem Bauteil-Unterseiten als
+ * Decke zaehlen. Darunter liegen Bauteile auf der Platine auf; darueber
+ * kommt man auch mit Sprung von der hoechsten Flaeche aus nicht hin.
+ */
+const CEILING_MIN_MM = 0.2;
+const CEILING_MAX_MM = 20;
+
+/**
  * Kapselt das geladene Platinen-Modell:
  *  - bringt es in Weltkoordinaten (CAD Z-up, Meter -> Three.js Y-up, skaliert)
  *  - sortiert jedes Mesh nach Ober-/Unterseite
@@ -240,7 +248,7 @@ export class Board {
       top: dropContained3D(collision.top.blockers),
       bottom: dropContained3D(collision.bottom.blockers),
     };
-    this.heightFields = {
+    const fields = {
       top: buildHeightField(
         [this.groups.top, this.groups.shared, this.enterableGroups.top],
         new THREE.Matrix4(),
@@ -254,6 +262,9 @@ export class Board {
         collision.bottom.walkY
       ),
     };
+    this.heightFields = { top: fields.top.floor, bottom: fields.bottom.floor };
+    /** Unterseiten von Bauteilen (z.B. Display) - die Decke beim Springen. */
+    this.ceilingFields = { top: fields.top.ceiling, bottom: fields.bottom.ceiling };
 
     console.log(
       `[Platine] ${sourceMeshes} Meshes zu ${this.drawCallCount} Batches zusammengefasst ` +
@@ -301,6 +312,23 @@ export class Board {
     }
 
     return height;
+  }
+
+  /**
+   * Niedrigste Bauteil-Unterseite an dieser Stelle, die nicht unter `minY`
+   * liegt - Infinity, wenn darueber frei ist.
+   */
+  ceilingHeight(side, x, z, minY) {
+    const base = this._cellBase(side, x, z);
+    if (base < 0) return Infinity;
+
+    const data = this.ceilingFields[side].data;
+    let ceiling = Infinity;
+    for (let k = 0; k < MAX_LAYERS; k++) {
+      const value = data[base + k];
+      if (value >= minY && value < ceiling) ceiling = value;
+    }
+    return ceiling;
   }
 
   /** Tasterkappe, die an dieser Stelle liegt - oder null. */
@@ -688,15 +716,30 @@ function buildPushButtons(capParts, groups, flip) {
  *
  * Zu hohe Flaechen werden uebersprungen, sonst waere die Oberkante des
  * Joystick-Kopfes der "Boden" unter ihm.
+ *
+ * Im selben Durchlauf entsteht das Deckenraster aus den nach unten zeigenden
+ * Flaechen: Unterseiten von Bauteilen, unter denen man hindurchlaeuft (das
+ * Display), damit man beim Springen dort anstoesst statt hindurchzufliegen.
  */
 function buildHeightField(groups, matrix, bounds, walkY) {
   const minX = bounds.min.x - HEIGHT_CELL_SIZE;
   const minZ = bounds.min.z - HEIGHT_CELL_SIZE;
   const cols = Math.ceil((bounds.max.x - minX) / HEIGHT_CELL_SIZE) + 1;
   const rows = Math.ceil((bounds.max.z - minZ) / HEIGHT_CELL_SIZE) + 1;
-  const data = new Float32Array(cols * rows * MAX_LAYERS).fill(NaN);
-  const field = { data, cols, rows, minX, minZ, baseY: walkY };
+  const createField = () => ({
+    data: new Float32Array(cols * rows * MAX_LAYERS).fill(NaN),
+    cols,
+    rows,
+    minX,
+    minZ,
+    baseY: walkY,
+  });
+  const field = createField();
+  const ceiling = createField();
   const limitY = walkY + MAX_GROUND_HEIGHT_MM * WORLD_PER_MM;
+  // Unterseiten direkt auf der Platine (aufliegende Bauteile) sind keine Decke.
+  const ceilingMinY = walkY + CEILING_MIN_MM * WORLD_PER_MM;
+  const ceilingMaxY = walkY + CEILING_MAX_MM * WORLD_PER_MM;
 
   const a = new THREE.Vector3();
   const b = new THREE.Vector3();
@@ -719,10 +762,6 @@ function buildHeightField(groups, matrix, bounds, walkY) {
         b.fromBufferAttribute(position, i1).applyMatrix4(matrix);
         c.fromBufferAttribute(position, i2).applyMatrix4(matrix);
 
-        // Komplette Dreiecke verwerfen, die ueber das Limit reichen - sonst
-        // entstuenden an den Flanken hoher Bauteile Plateaus auf Limit-Hoehe.
-        if (Math.max(a.y, b.y, c.y) > limitY) continue;
-
         // Nach unten zeigende Flaechen sind Decken, kein Boden. Ohne diesen
         // Filter waere die Unterseite des Displays eine begehbare Schicht.
         normal
@@ -732,21 +771,32 @@ function buildHeightField(groups, matrix, bounds, walkY) {
             normals.getZ(i0) + normals.getZ(i1) + normals.getZ(i2)
           )
           .transformDirection(matrix);
-        if (normal.y <= 0) continue;
 
-        rasterizeTriangle(a, b, c, field);
+        if (normal.y < 0) {
+          if (Math.min(a.y, b.y, c.y) > ceilingMinY && Math.max(a.y, b.y, c.y) <= ceilingMaxY) {
+            rasterizeTriangle(a, b, c, ceiling, true);
+          }
+          continue;
+        }
+
+        // Komplette Dreiecke verwerfen, die ueber das Limit reichen - sonst
+        // entstuenden an den Flanken hoher Bauteile Plateaus auf Limit-Hoehe.
+        if (normal.y === 0 || Math.max(a.y, b.y, c.y) > limitY) continue;
+
+        rasterizeTriangle(a, b, c, field, false);
       }
     }
   }
 
-  return field;
+  return { floor: field, ceiling };
 }
 
 /**
  * Legt eine Flaechenhoehe in einer Zelle ab. Dicht beieinander liegende
- * Flaechen werden zu einer Schicht zusammengefasst.
+ * Flaechen werden zu einer Schicht zusammengefasst - beim Boden zaehlt die
+ * hoehere, bei der Decke (`keepLower`) die niedrigere.
  */
-function insertLayer(data, base, height) {
+function insertLayer(data, base, height, keepLower) {
   let free = -1;
 
   for (let k = 0; k < MAX_LAYERS; k++) {
@@ -758,7 +808,7 @@ function insertLayer(data, base, height) {
     }
 
     if (Math.abs(value - height) <= LAYER_MERGE) {
-      if (height > value) data[base + k] = height;
+      if (keepLower ? height < value : height > value) data[base + k] = height;
       return;
     }
   }
@@ -768,7 +818,7 @@ function insertLayer(data, base, height) {
     return;
   }
 
-  collapseClosest(data, base, height);
+  collapseClosest(data, base, height, keepLower);
 }
 
 /** Scratch fuer das Zusammenlegen - spart eine Allokation je Dreieck. */
@@ -776,9 +826,10 @@ const layerScratch = new Float64Array(MAX_LAYERS + 1);
 
 /**
  * Zelle ist voll: die beiden dichtesten Schichten verschmelzen. Unterste und
- * oberste Flaeche bleiben dabei immer erhalten.
+ * oberste Flaeche bleiben dabei immer erhalten. Beim Boden faellt die untere
+ * des Paares weg, bei der Decke (`keepLower`) die obere.
  */
-function collapseClosest(data, base, height) {
+function collapseClosest(data, base, height, keepLower) {
   for (let k = 0; k < MAX_LAYERS; k++) layerScratch[k] = data[base + k];
   layerScratch[MAX_LAYERS] = height;
   layerScratch.sort();
@@ -790,7 +841,7 @@ function collapseClosest(data, base, height) {
     const gap = layerScratch[k] - layerScratch[k - 1];
     if (gap < smallest) {
       smallest = gap;
-      drop = k - 1;
+      drop = keepLower ? k : k - 1;
     }
   }
 
@@ -801,7 +852,7 @@ function collapseClosest(data, base, height) {
 }
 
 /** Scanline-freie Variante: Zellmittelpunkte im Dreiecks-Bounding-Rechteck testen. */
-function rasterizeTriangle(a, b, c, field) {
+function rasterizeTriangle(a, b, c, field, keepLower) {
   const { data, cols, rows, minX, minZ } = field;
 
   const colStart = Math.max(0, Math.floor((Math.min(a.x, b.x, c.x) - minX) / HEIGHT_CELL_SIZE));
@@ -831,7 +882,7 @@ function rasterizeTriangle(a, b, c, field) {
       if (w2 < 0 || w2 > 1) continue;
 
       const height = w0 * a.y + w1 * b.y + w2 * c.y;
-      insertLayer(data, (offset + col) * MAX_LAYERS, height);
+      insertLayer(data, (offset + col) * MAX_LAYERS, height, keepLower);
     }
   }
 }
