@@ -30,7 +30,13 @@
  *    Bei abweichendem Mapping ("" oder "vr") koennen Indizes variieren -
  *    das wird im Debug-Overlay angezeigt, damit man es sofort sieht.
  *
- * 5. DEADZONE
+ * 5. GERAETEFILTER
+ *    Die Gamepad API meldet auch Geraete, die keine richtigen Controller sind
+ *    (z.B. Headsets oder Eingabegeraete mit Medientasten). Angenommen wird
+ *    deshalb - wie in der Controller-Dashboard-Website - nur ein Geraet mit
+ *    genau REQUIRED_BUTTONS Tasten und REQUIRED_AXES Achsen.
+ *
+ * 6. DEADZONE
  *    Analog-Sticks liefern in Ruhelage selten exakt 0. Die Deadzone wird
  *    radial (ueber den Betrag des Vektors) angewandt, nicht pro Achse -
  *    sonst entstehen kantige Diagonalen. Ausserhalb der Deadzone wird der
@@ -88,6 +94,13 @@ const ANALOG_BUTTONS = new Set(["L2", "R2"]);
 const TRIGGER_THRESHOLD = 0.5;
 
 const BUTTON_NAMES = Object.keys(BUTTON_INDEX);
+
+/** Geraeteprofil des XENSIV-Controllers - andere Geraete werden ignoriert. */
+const REQUIRED_BUTTONS = 16;
+const REQUIRED_AXES = 4;
+
+const isSupportedGamepad = (pad) =>
+  pad.buttons.length === REQUIRED_BUTTONS && pad.axes.length === REQUIRED_AXES;
 
 export class GamepadManager {
   /**
@@ -201,11 +214,13 @@ export class GamepadManager {
 
   _onConnected(event) {
     const { index, id, mapping, axes, buttons } = event.gamepad;
+    const supported = isSupportedGamepad(event.gamepad);
     console.log(
-      `[Gamepad] verbunden - Index ${index}: "${id}" ` +
+      `[Gamepad] ${supported ? "verbunden" : "ignoriert (kein unterstuetzter Controller)"} - ` +
+        `Index ${index}: "${id}" ` +
         `(mapping: ${mapping || "unbekannt"}, ${axes.length} Achsen, ${buttons.length} Buttons)`
     );
-    if (this.activeIndex === null) {
+    if (supported && this.activeIndex === null) {
       this.activeIndex = index;
     }
   }
@@ -224,7 +239,7 @@ export class GamepadManager {
   _pickFirstAvailableGamepad() {
     const pads = navigator.getGamepads ? navigator.getGamepads() : [];
     for (const pad of pads) {
-      if (pad && pad.connected) {
+      if (pad && pad.connected && isSupportedGamepad(pad)) {
         this.activeIndex = pad.index;
         return;
       }
@@ -245,7 +260,12 @@ export class GamepadManager {
     if (this.activeIndex === null) return null;
 
     const pad = pads[this.activeIndex];
-    return pad && pad.connected ? pad : null;
+    // Unter dem Index kann inzwischen ein anderes Geraet haengen.
+    if (!pad || !pad.connected || !isSupportedGamepad(pad)) {
+      this.activeIndex = null;
+      return null;
+    }
+    return pad;
   }
 
   _resetState() {

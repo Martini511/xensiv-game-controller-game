@@ -120,7 +120,14 @@ Belegungen nebeneinander.
 > **Hinweis zur Gamepad API:** Browser geben einen Controller aus
 > Datenschutzgruenden erst frei, nachdem einmal eine Taste am Controller
 > gedrueckt wurde. Bis dahin zeigt das Debug-Overlay
-> "Kein Controller verbunden".
+> "No controller connected".
+>
+> **Geraetefilter:** Die Gamepad API meldet auch Geraete, die keine
+> richtigen Controller sind. Wie in der Controller-Dashboard-Website wird
+> nur ein Geraet mit genau **16 Tasten und 4 Achsen** angenommen
+> (`REQUIRED_BUTTONS` / `REQUIRED_AXES` in
+> [src/input/GamepadManager.js](src/input/GamepadManager.js)). Ignorierte
+> Geraete stehen in der Browser-Konsole.
 
 ## Debug-Overlay
 
